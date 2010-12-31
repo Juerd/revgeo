@@ -1,21 +1,17 @@
-#include <NewSoftSerial.h>
 #include <LiquidCrystal.h>
+#include <NewSoftSerial.h>
 #include <TinyGPS.h>
 
+const byte BUTTON_PIN =  4;
+const float TOLERANCE = 30;  // meters
+
 LiquidCrystal lcd(7, 8, 5, 6, 11, 12);
-TinyGPS       gps;
 NewSoftSerial nss(2, 3);
+TinyGPS       gps;
 
-#define BUTTON_PIN 4
-#define TOLERANCE 30  // meters
+const byte NOT = 0, SHORT = 1, LONG = 2;
 
-
-
-#define NOT   0
-#define SHORT 1
-#define LONG  2
-
-unsigned char button() {
+byte button() {
   static unsigned long pressed = 0;
   unsigned long elapsed;
   
@@ -24,15 +20,12 @@ unsigned char button() {
     if (elapsed < 100) return NOT;
     if (digitalRead(BUTTON_PIN) == LOW) return NOT;
     pressed = 0;
-    return elapsed > 50 ? LONG : SHORT;
+    return elapsed > 500 ? LONG : SHORT;
   }
   if (digitalRead(BUTTON_PIN) != LOW) return NOT;
   pressed = millis();
   return NOT;
 }
-
-// GPS
-
 
 void setup() {
   pinMode(BUTTON_PIN, INPUT);
@@ -47,46 +40,30 @@ void setup() {
 
 void loop() {
   static enum {
-    SELECT_ROUTE_SETUP,
-    SELECT_ROUTE_UPDATE,
-    SELECT_ROUTE,
-    WAIT_FOR_FIX_SETUP,
-    WAIT_FOR_FIX_UPDATE,
-    WAIT_FOR_FIX,
-    ROUTE_SETUP,
-    ROUTE_UPDATE,
-    ROUTE,
-    DESTINATION,
-    FAIL_SETUP,
-    FAIL,
-    PROGRAM_YESNO_SETUP,
-    PROGRAM_YESNO_UPDATE,
-    PROGRAM_YESNO,
-    PROGRAM_SETUP,
-    PROGRAM,
-    PROGRAM_DONE
+     SELECT_ROUTE_SETUP,  SELECT_ROUTE_UPDATE, SELECT_ROUTE,
+     WAIT_FOR_FIX_SETUP,  WAIT_FOR_FIX_UPDATE, WAIT_FOR_FIX,
+            ROUTE_SETUP,
+         WAYPOINT_SETUP,      WAYPOINT_UPDATE, WAYPOINT,
+                                               DESTINATION,
+             FAIL_SETUP,                       FAIL,
+    PROGRAM_YESNO_SETUP, PROGRAM_YESNO_UPDATE, PROGRAM_YESNO,
+          PROGRAM_SETUP,                       PROGRAM,
+                                               PROGRAM_DONE
   } state = SELECT_ROUTE_SETUP;
-  static unsigned char route;
-  static unsigned char tries_left;
-  static unsigned int  dotstate = 0;
-  static boolean       programming = false;
-  static boolean       yesno;
-  static float         there_lat;
-  static float         there_lon;
   
-  unsigned long age;
-  boolean       fix;
+  static byte          route, waypoint, tries_left;
+  static byte          dotstate = 0;
+  static boolean       programming = false, yesno;
+  static unsigned long fix = 0;
+  static float         there_lat, there_lon, distance;
 
-  float         here_lat;
-  float         here_lon;
-  
-  static float  distance;
-
-  
   while (nss.available()) {
     char c = nss.read();
     if (gps.encode(c)) {
-      fix = true;
+      unsigned long age;
+      float here_lat, here_lon;
+      
+      if (!fix) fix = millis();
       gps.f_get_position(&here_lat, &here_lon, &age);
       distance = TinyGPS::distance_between(here_lat, here_lon, there_lat, there_lon);
     }
@@ -124,39 +101,45 @@ void loop() {
       break;
  
     case WAIT_FOR_FIX_SETUP:
-      fix = false;
-      dotstate = 300;
+      fix = 0;
       lcd.clear();
       lcd.print("Wacht op GPS-fix...");
-      delay(500);
       state = WAIT_FOR_FIX_UPDATE;
       break;
       
     case WAIT_FOR_FIX_UPDATE:
-      if (dotstate >= 400) dotstate = 0;
+      if (dotstate >= 100) dotstate = 0;
       lcd.setCursor(16, 0);
-      for (char i = 0; i <= dotstate / 100; i++) lcd.print(".");
+      for (byte i = 0; i <= dotstate / 25; i++) lcd.print(".");
       lcd.print("   ");
       state = WAIT_FOR_FIX;
       break;
     
     case WAIT_FOR_FIX:
-      if (button() == LONG) state = PROGRAM_YESNO_SETUP;
-      else if (fix) state = programming ? PROGRAM_SETUP : ROUTE_SETUP;
-      else if (++dotstate % 100) state = WAIT_FOR_FIX_UPDATE;
+      if (button() == LONG)
+        state = PROGRAM_YESNO_SETUP;
+      else if (fix && millis() - fix > 2000)
+        state = programming ? PROGRAM_SETUP : ROUTE_SETUP;
+      else if (++dotstate % 100)
+        state = WAIT_FOR_FIX_UPDATE;
       break;
       
     case ROUTE_SETUP:
+      waypoint = 1;
+      state = WAYPOINT_SETUP;
+      break;
+      
+    case WAYPOINT_SETUP:
       tries_left =  6;
-      distance   =  0;
       there_lat  = 52.073228; // TODO: read from memory
       there_lon  =  4.328249;
-      state = ROUTE_UPDATE;
+      distance   = -1;
+      state = WAYPOINT_UPDATE;
       break;
     
-    case ROUTE_UPDATE:
+    case WAYPOINT_UPDATE:
       lcd.clear();
-      if (distance) {
+      if (distance >= 0) {
         lcd.print("Afstand = ");
         lcd.print(distance, 0);
         lcd.print("m    ");
@@ -167,13 +150,13 @@ void loop() {
       lcd.print(" keer  ");
       lcd.setCursor(0, 2);
       lcd.print("drukken.");
-      state = ROUTE;
+      state = WAYPOINT;
       break;
       
-    case ROUTE:
-      if (!button()) break;
+    case WAYPOINT:
+      if (distance < 0 || !button()) break;
       state = distance <= TOLERANCE ? DESTINATION
-            : --tries_left          ? ROUTE_UPDATE
+            : --tries_left          ? WAYPOINT_UPDATE
             :                         FAIL_SETUP;
       break;
     
