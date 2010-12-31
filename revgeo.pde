@@ -1,17 +1,23 @@
 
 #include <EEPROM.h>
-#include <LiquidCrystal.h>
+#include <PWMServo.h>
+#include <Nokia5110.h>
 #include <NewSoftSerial.h>
 #include <TinyGPS.h>
 
-const byte BUTTON_PIN   =  4;
-const byte MAX_WAYPOINT = 10;
-const byte MAX_ROUTE    = 10;
-const byte TRIES[]      = { 15, 25, 35 };
+const byte BUTTON_PIN    =  4;
+const byte BACKLIGHT_PIN = 13;
+const byte SERVO_PIN     = 10;  // 9 or 10 only
+const byte TOR_PIN       =  6;
 
-LiquidCrystal lcd(7, 8, 5, 6, 11, 12);
+const byte MAX_WAYPOINT  = 10;
+const byte MAX_ROUTE     = 10;
+const byte TRIES[]       = { 15, 25, 35 };
+
+Nokia5110     lcd(8, 9, 7, 11, 12);
 NewSoftSerial nss(2, 3);
 TinyGPS       gps;
+PWMServo      servo;
 
 // http://www.arduino.cc/playground/Code/EEPROMWriteAnything
 template <class T> int EEPROM_writeAnything(int ee, const T& value) {
@@ -45,19 +51,61 @@ byte button() {
   return NOT;
 }
 
+const byte OFF = 0, CHECK = 1, ON = 2;
+
+void backlight(unsigned int param) {
+  static unsigned long endtime = 0;
+  if (param == CHECK) {
+    if (endtime && millis() >= endtime) {
+      backlight(OFF);
+      endtime = 0;
+    }
+    return;
+  }
+  digitalWrite(BACKLIGHT_PIN, param >= ON ? HIGH : LOW);
+  endtime = param > ON ? millis() + param : 0;
+}
+
+void set_servo(int a) {
+  static byte angle;
+  static unsigned long endtime = 0;
+
+  if (a >= 0) {
+    angle = a;
+    digitalWrite(TOR_PIN, HIGH);
+    servo.write(angle);
+    endtime = millis() + 1000;
+  }
+  if (endtime && millis() >= endtime) {
+    digitalWrite(TOR_PIN, LOW);
+    endtime = 0;
+  }
+}
+
+
 int address_for(byte route, byte waypoint) {
   return (route - 1) * 100 + (waypoint - 1) * 10;
 }
 
 void setup() {
+  
+  pinMode(BACKLIGHT_PIN, OUTPUT);
+  pinMode(TOR_PIN, OUTPUT);
+  
+  lcd.clear();
+  lcd.setInverse();
+  delay(500);
+  lcd.print("\n\n    REV\n       GEO");
+  delay(1000);
+  lcd.noInverse();
+  delay(500);
+  
+//  Serial.begin(9600);
+  nss.begin(9600);
+  servo.attach(SERVO_PIN);
   pinMode(BUTTON_PIN, INPUT);
   digitalWrite(BUTTON_PIN, HIGH);
-  lcd.begin(20, 4);
   lcd.clear();
-  lcd.print("init...");
-  nss.begin(9600);
-  //Serial.begin(9600);
-  delay(2000);
 }
 
 struct Waypoint {
@@ -70,8 +118,10 @@ struct Waypoint {
 
 void loop() {
   static enum {
+                                               CRASHED,
      SELECT_ROUTE_SETUP,  SELECT_ROUTE_UPDATE, SELECT_ROUTE,
      SELECT_TRIES_SETUP,  SELECT_TRIES_UPDATE, SELECT_TRIES,
+            CLOSE_SETUP,                       CLOSE,
      WAIT_FOR_FIX_SETUP,  WAIT_FOR_FIX_UPDATE, WAIT_FOR_FIX,
             ROUTE_SETUP,                                      ROUTE_DONE,
          WAYPOINT_SETUP,      WAYPOINT_UPDATE, WAYPOINT,      WAYPOINT_DONE,
@@ -88,6 +138,9 @@ void loop() {
   static Waypoint      there;
   static float         here_lat, here_lon;
 
+  backlight(CHECK);
+  set_servo(-1);
+
   while (nss.available()) {
     char c = nss.read();
     if (gps.encode(c)) {
@@ -99,19 +152,20 @@ void loop() {
   }
   
   switch (state) {
+    case CRASHED: break;
+    
     case SELECT_ROUTE_SETUP: {
+      backlight(ON);
+      set_servo(5);
       route = 1;
       lcd.clear();
-      lcd.print("Kies route.");
-      lcd.setCursor(0, 1);
-      lcd.print("kort = +1, lang = OK");
+      lcd.print("Kies route.\nkort: +1\nlang: OK\n\nGeselecteerd:\n");
       state = SELECT_ROUTE_UPDATE;
       break;  
     }
     
     case SELECT_ROUTE_UPDATE: {
-      lcd.setCursor(0, 2);
-      lcd.print("Geselecteerd: ");
+      lcd.print("\rRoute #");
       lcd.print(route, DEC);
       lcd.print("  ");
       state = SELECT_ROUTE;
@@ -135,20 +189,15 @@ void loop() {
     case SELECT_TRIES_SETUP: {
       triesidx = 0;
       lcd.clear();
-      lcd.print("Kies moeilijkheid.");
-      lcd.setCursor(0, 1);
-      lcd.print("lang = bevestig");
-      lcd.setCursor(0, 3);
-      lcd.print("            pogingen");
+      lcd.print("Kies niveau.\nkort: volgende\nlang: bevestig\n\nGeselecteerd:\n");
       state = SELECT_TRIES_UPDATE;
       break;  
     }
     
     case SELECT_TRIES_UPDATE: {
-      lcd.setCursor(0, 2);
-      lcd.print("Geselecteerd: ");
+      lcd.print("\r");
       lcd.print(TRIES[triesidx], DEC);
-      lcd.print("  ");
+      lcd.print(" pogingen  ");
       state = SELECT_TRIES;
       break;
     }
@@ -161,25 +210,40 @@ void loop() {
           state = SELECT_TRIES_UPDATE;
           break;
         case LONG:
-          state = WAIT_FOR_FIX_SETUP;
+          state = CLOSE_SETUP;
           break;
       }
+      break;
+    }
+    
+    case CLOSE_SETUP: {
+      lcd.clear();
+      lcd.print("Sluit deksel.\nDruk knopje om\nhet doosje te\nsluiten.");
+      state = CLOSE;
+      break;
+    }
+    
+    case CLOSE: {
+      if (!button()) break;
+      set_servo(90);
+      state = WAIT_FOR_FIX_SETUP;
       break;
     }
  
     case WAIT_FOR_FIX_SETUP: {
       fix = 0;
+      backlight(5000);
       lcd.clear();
-      lcd.print("Wacht op GPS-fix...");
+      lcd.print("Wacht op\nGPS-fix...");
       state = WAIT_FOR_FIX_UPDATE;
       break;
     }
       
     case WAIT_FOR_FIX_UPDATE: {
       if (dotstate >= 100) dotstate = 0;
-      lcd.setCursor(16, 0);
+      lcd.setCursor(7, 1);
       for (byte i = 0; i <= dotstate / 25; i++) lcd.print(".");
-      lcd.print("   ");
+      lcd.print("    ");
       state = WAIT_FOR_FIX;
       break;
     }
@@ -202,7 +266,7 @@ void loop() {
       
     case WAYPOINT_SETUP: {
       lcd.clear();
-      lcd.print("Onderweg naar #");
+      lcd.print("Onderweg naar\nwaypoint ");
       lcd.print(waypoint, DEC);
       EEPROM_readAnything(address_for(route, waypoint), there);
       tries_left = TRIES[triesidx];
@@ -212,18 +276,17 @@ void loop() {
     }
     
     case WAYPOINT_UPDATE: {
+      backlight(15000);
       if (distance >= 0) {
-        lcd.setCursor(0, 1);
-        lcd.print("Afstand = ");
+        lcd.setCursor(0, 2);
+        lcd.print("Afstand:\n");
         lcd.print(distance, 0);
         lcd.print("m    ");
       }
-      lcd.setCursor(0, 2);
+      lcd.setCursor(0, 4);
       lcd.print("Je mag nog ");
       lcd.print(tries_left, DEC);
-      lcd.print(" keer  ");
-      lcd.setCursor(0, 3);
-      lcd.print("drukken.");
+      lcd.print(" \nkeer drukken.");
       state = WAYPOINT;
       break;
     }
@@ -239,6 +302,7 @@ void loop() {
     case WAYPOINT_DONE: {
       lcd.clear();
       lcd.print("WOOHOO!! YAY!!");
+      backlight(ON);
       delay(4000);
       if (waypoint == MAX_WAYPOINT) {
         state = ROUTE_DONE;
@@ -251,8 +315,10 @@ void loop() {
     
     case ROUTE_DONE: {
       lcd.clear();
+      backlight(10000);
+      set_servo(5);
       lcd.print("Route klaar!");
-      for (;;) delay(1000); // ad infinitum
+      state = CRASHED;
       break;
     }
       
@@ -263,13 +329,13 @@ void loop() {
         EEPROM_readAnything(address_for(route, ++waypoint), there);
       EEPROM_readAnything(address_for(route, --waypoint), there);
       lcd.setCursor(0, 1);
-      lcd.print("Afstand tot einddoel");
+      lcd.print("Afstand tot\neinddoel:\n");
       state = FAIL;
       break;
     }
     
     case FAIL: {
-      lcd.setCursor(0, 2);
+      lcd.print("\r");
       lcd.print(distance, 0);
       lcd.print(" m     ");
       break;
@@ -278,21 +344,16 @@ void loop() {
     case PROGRAM_YESNO_SETUP: {
       yesno = false;
       lcd.clear();
+      backlight(ON);
       lcd.print("Route ");
       lcd.print(route, DEC);
-      lcd.print(" programmeren?");
-      lcd.setCursor(0, 2);
-      lcd.print("kort = wissel");
-      lcd.setCursor(0, 3);
-      lcd.print("lang = bevestig");
+      lcd.print("\nprogrammeren?\nkort: wissel\nlang: bevestig\nGeselecteerd:\n");
       state = PROGRAM_YESNO_UPDATE;
       break;
     }
 
     case PROGRAM_YESNO_UPDATE: {
-      lcd.setCursor(0, 1);
-      lcd.print("Geselecteerd: ");
-      lcd.print(yesno ? "JA " : "NEE");
+      lcd.print(yesno ? "\rJA " : "\rNEE");
       state = PROGRAM_YESNO;
       break;
     }
@@ -318,13 +379,14 @@ void loop() {
     }
   
     case PROGRAM_UPDATE: {
+      backlight(15000);
       lcd.clear();
-      lcd.print("Ga naar waypoint ");
+      lcd.print("Ga naar\nwaypoint ");
       lcd.print(waypoint, DEC);
-      lcd.setCursor(0, 1);
       if (waypoint > 1) {
-        lcd.print("Afstand tot wp ");
+        lcd.print("\nWP ");
         lcd.print(waypoint - 1, DEC);
+        lcd.print(" -> hier:\n");
       }
       state = PROGRAM;
       break;
@@ -334,7 +396,7 @@ void loop() {
       switch (button()) {
         case NOT:
           if (waypoint < 2) break;
-          lcd.setCursor(0, 2);
+          lcd.print("\r");
           lcd.print(distance, 0);
           lcd.print("m      ");
           break;
@@ -342,18 +404,15 @@ void loop() {
           state = PROGRAM_DONE;
           break;
         case SHORT:
-          state = PROGRAM_UPDATE;
           there.lat = here_lat;
           there.lon = here_lon;
           there.tolerance = 30;  // FIXME
           there.flags = 0;  // FIXME
           EEPROM_writeAnything(address_for(route, waypoint), there);
+          state = ++waypoint > MAX_WAYPOINT ? PROGRAM_DONE : PROGRAM_UPDATE;
           break;
       }
-      if (++waypoint > MAX_WAYPOINT) {
-        state = PROGRAM_DONE;
-        break;
-      }
+      break;
     }
       
     case PROGRAM_DONE: {
@@ -365,7 +424,7 @@ void loop() {
         EEPROM_writeAnything(address_for(route, waypoint), there);
       }
       lcd.clear();
-      lcd.print("That's all, folks!");
+      lcd.print("That's all,\nfolks!");
       delay(5000);
       programming = false;
       state = SELECT_ROUTE_SETUP;
