@@ -1,14 +1,13 @@
-
+#include "AnythingEEPROM.h"
 #include <EEPROM.h>
 #include <PWMServo.h>
 #include <Nokia5110.h>
 #include <NewSoftSerial.h>
 #include <TinyGPS.h>
+#include <PowerPin.h>
+#include <Button.h>
 
-const byte BUTTON_PIN    =  4;
-const byte BACKLIGHT_PIN = 13;
 const byte SERVO_PIN     = 10;  // 9 or 10 only
-const byte TOR_PIN       =  6;
 
 const byte MAX_WAYPOINT  = 10;
 const byte MAX_ROUTE     = 10;
@@ -18,81 +17,27 @@ Nokia5110     lcd(8, 9, 7, 11, 12);
 NewSoftSerial nss(2, 3);
 TinyGPS       gps;
 PWMServo      servo;
+PowerPin      servo_power(6);
+PowerPin      backlight(13);
+Button        button(4);
 
-// http://www.arduino.cc/playground/Code/EEPROMWriteAnything
-template <class T> int EEPROM_writeAnything(int ee, const T& value) {
-    const byte* p = (const byte*)(const void*)&value;
-    int i;
-    for (i = 0; i < sizeof(value); i++) EEPROM.write(ee++, *p++);
-    return i;
-}
-template <class T> int EEPROM_readAnything(int ee, T& value) {
-    byte* p = (byte*)(void*)&value;
-    int i;
-    for (i = 0; i < sizeof(value); i++) *p++ = EEPROM.read(ee++);
-    return i;
+void open_lock() {
+  servo_power.on(1000);
+  servo.write(180);
 }
 
-const byte NOT = 0, SHORT = 1, LONG = 2;
-
-byte button() {
-  static unsigned long pressed = 0;
-  unsigned long elapsed;
-  
-  if (pressed) {
-    elapsed = millis() - pressed;
-    if (elapsed < 100) return NOT;
-    if (digitalRead(BUTTON_PIN) == LOW) return NOT;
-    pressed = 0;
-    return elapsed > 500 ? LONG : SHORT;
-  }
-  if (digitalRead(BUTTON_PIN) != LOW) return NOT;
-  pressed = millis();
-  return NOT;
+void close_lock() {
+  servo_power.on(1000);
+  servo.write(90);
 }
-
-const byte OFF = 0, CHECK = 1, ON = 2;
-
-void backlight(unsigned int param) {
-  static unsigned long endtime = 0;
-  if (param == CHECK) {
-    if (endtime && millis() >= endtime) {
-      backlight(OFF);
-      endtime = 0;
-    }
-    return;
-  }
-  digitalWrite(BACKLIGHT_PIN, param >= ON ? HIGH : LOW);
-  endtime = param > ON ? millis() + param : 0;
-}
-
-void set_servo(int a) {
-  static byte angle;
-  static unsigned long endtime = 0;
-
-  if (a >= 0) {
-    angle = a;
-    digitalWrite(TOR_PIN, HIGH);
-    servo.write(angle);
-    endtime = millis() + 1000;
-  }
-  if (endtime && millis() >= endtime) {
-    digitalWrite(TOR_PIN, LOW);
-    endtime = 0;
-  }
-}
-
 
 int address_for(byte route, byte waypoint) {
   return (route - 1) * 100 + (waypoint - 1) * 10;
 }
 
-void setup() {
-  
-  pinMode(BACKLIGHT_PIN, OUTPUT);
-  pinMode(TOR_PIN, OUTPUT);
-  
+void setup() {  
   lcd.clear();
+  backlight.on();
   lcd.setInverse();
   delay(500);
   lcd.print("\n\n    REV\n       GEO");
@@ -103,8 +48,6 @@ void setup() {
 //  Serial.begin(9600);
   nss.begin(9600);
   servo.attach(SERVO_PIN);
-  pinMode(BUTTON_PIN, INPUT);
-  digitalWrite(BUTTON_PIN, HIGH);
   lcd.clear();
 }
 
@@ -138,8 +81,8 @@ void loop() {
   static Waypoint      there;
   static float         here_lat, here_lon;
 
-  backlight(CHECK);
-  set_servo(-1);
+  backlight.check();
+  servo_power.check();
 
   while (nss.available()) {
     char c = nss.read();
@@ -155,8 +98,7 @@ void loop() {
     case CRASHED: break;
     
     case SELECT_ROUTE_SETUP: {
-      backlight(ON);
-      set_servo(5);
+      open_lock();;
       route = 1;
       lcd.clear();
       lcd.print("Kies route.\nkort: +1\nlang: OK\n\nGeselecteerd:\n");
@@ -173,7 +115,7 @@ void loop() {
     }
     
     case SELECT_ROUTE: {
-      switch (button()) {
+      switch (button.pressed()) {
         case SHORT:
           route++;
           if (route > MAX_ROUTE) route = 1;
@@ -203,7 +145,7 @@ void loop() {
     }
     
     case SELECT_TRIES: {
-      switch (button()) {
+      switch (button.pressed()) {
         case SHORT:
           triesidx++;
           if (triesidx >= sizeof(TRIES)) triesidx = 0;
@@ -224,15 +166,15 @@ void loop() {
     }
     
     case CLOSE: {
-      if (!button()) break;
-      set_servo(90);
+      if (!button.pressed()) break;
+      close_lock();;
       state = WAIT_FOR_FIX_SETUP;
       break;
     }
  
     case WAIT_FOR_FIX_SETUP: {
       fix = 0;
-      backlight(5000);
+      backlight.on(5000);
       lcd.clear();
       lcd.print("Wacht op\nGPS-fix...");
       state = WAIT_FOR_FIX_UPDATE;
@@ -249,7 +191,8 @@ void loop() {
     }
     
     case WAIT_FOR_FIX: {
-      if (button() == LONG)
+      //fixme: backlight aan als je op het knopje drukt tijdens wachten (switch button pressed)
+      if (button.pressed() == LONG)
         state = PROGRAM_YESNO_SETUP;
       else if (fix && millis() - fix > 2000)
         state = programming ? PROGRAM_SETUP : ROUTE_SETUP;
@@ -276,7 +219,7 @@ void loop() {
     }
     
     case WAYPOINT_UPDATE: {
-      backlight(15000);
+      backlight.on(15000);
       if (distance >= 0) {
         lcd.setCursor(0, 2);
         lcd.print("Afstand:\n");
@@ -292,7 +235,7 @@ void loop() {
     }
       
     case WAYPOINT: {
-      if (distance < 0 || !button()) break;
+      if (distance < 0 || !button.pressed()) break;
       state = distance <= there.tolerance ? WAYPOINT_DONE
             : --tries_left                ? WAYPOINT_UPDATE
             :                               FAIL_SETUP;
@@ -302,7 +245,7 @@ void loop() {
     case WAYPOINT_DONE: {
       lcd.clear();
       lcd.print("WOOHOO!! YAY!!");
-      backlight(ON);
+      backlight.on();
       delay(4000);
       if (waypoint == MAX_WAYPOINT) {
         state = ROUTE_DONE;
@@ -315,8 +258,8 @@ void loop() {
     
     case ROUTE_DONE: {
       lcd.clear();
-      backlight(10000);
-      set_servo(5);
+      backlight.on(10000);
+      open_lock();;
       lcd.print("Route klaar!");
       state = CRASHED;
       break;
@@ -335,16 +278,28 @@ void loop() {
     }
     
     case FAIL: {
+      switch (button.pressed(60000)) {
+        case SHORT:
+        backlight.on(1500);
+        break;
+      case LONG:
+        open_lock();;  // backdoor
+      break;
+      
+      
+      //fixme: backlight aan als je op het knopje drukt tijdens wachten (switch button pressed)
+      
       lcd.print("\r");
       lcd.print(distance, 0);
       lcd.print(" m     ");
       break;
     }
     
+    
     case PROGRAM_YESNO_SETUP: {
       yesno = false;
       lcd.clear();
-      backlight(ON);
+      backlight.on();
       lcd.print("Route ");
       lcd.print(route, DEC);
       lcd.print("\nprogrammeren?\nkort: wissel\nlang: bevestig\nGeselecteerd:\n");
@@ -359,7 +314,7 @@ void loop() {
     }
      
     case PROGRAM_YESNO: {
-      switch (button()) {
+      switch (button.pressed()) {
         case SHORT:
           yesno = !yesno;
           state = PROGRAM_YESNO_UPDATE;
@@ -379,7 +334,7 @@ void loop() {
     }
   
     case PROGRAM_UPDATE: {
-      backlight(15000);
+      backlight.on(15000);
       lcd.clear();
       lcd.print("Ga naar\nwaypoint ");
       lcd.print(waypoint, DEC);
@@ -393,7 +348,7 @@ void loop() {
     }
       
     case PROGRAM: {
-      switch (button()) {
+      switch (button.pressed()) {
         case NOT:
           if (waypoint < 2) break;
           lcd.print("\r");
