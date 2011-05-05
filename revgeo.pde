@@ -342,15 +342,13 @@ void loop() {
     case PROGRAM_UPDATE: {
       backlight.on(15000);
       lcd.clear();
-      lcd.print("Ga naar\nwaypoint ");
+      lcd.print("Ga naar WP ");
       lcd.print(waypoint, DEC);
+      lcd.print(".\n");
+      if (waypoint > 1)
+        lcd.print("Tussenafstand:");
       lcd.setCursor(0,4);
       lcd.print("WP       eindekort      lang");
-      if (waypoint > 1) {
-        //lcd.print("\nWP ");
-        //lcd.print(waypoint - 1, DEC);
-        //lcd.print(" -> hier:\n");
-      }
       state = PROGRAM;
       break;
     }
@@ -358,12 +356,10 @@ void loop() {
     case PROGRAM: {
       switch (button.pressed()) {
         case NOT:
-          lcd.setCursor(0, 3);
+          lcd.setCursor(4, 2);
           if (waypoint < 2) break;
-          lcd.setCursor(0, 2);
-          lcd.print("Tussenafstand:");
           lcd.print(distance, 0);
-          lcd.print("m      ");
+          lcd.print("m    ");
           break;
         case LONG:
           state = PROGRAM_DONE;
