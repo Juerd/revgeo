@@ -26,12 +26,12 @@ void setup() {
 }
 
 void open_lock() {
-  servo_power.on(10000);
+  servo_power.on(1000);
   servo.write(180);
 }
 
 void close_lock() {
-  servo_power.on(10000);
+  servo_power.on(1000);
   servo.write(90);
 }
 
@@ -71,6 +71,7 @@ enum state_enum {
            FAIL_SETUP,                       FAIL,
   PROGRAM_YESNO_SETUP,                       PROGRAM_YESNO,
         PROGRAM_SETUP,       PROGRAM_UPDATE, PROGRAM,       PROGRAM_DONE,
+                                                   PROGRAM_STORE,
        PROGRESS_SETUP,      PROGRESS_UPDATE, PROGRESS,
 };
   
@@ -243,7 +244,7 @@ void loop() {
       }
       lcd.setCursor(0, 4);
       lcd.print("Je mag ");
-      lcd.print(waypoint > 1 && tries_left == TRIES[triesidx] ? "weer" : "nog");
+      lcd.print(waypoint > 1 && tries_left == TRIES[triesidx] ? "weer " : "nog ");
       lcd.print(tries_left, DEC);
       lcd.print(" \nkeer drukken.");
       state = WAYPOINT;
@@ -378,17 +379,23 @@ void loop() {
           state = PROGRAM_DONE;
           break;
         case SHORT:
-          there.lat = here_lat;
-          there.lon = here_lon;  
-          there.tolerance = 30;  // FIXME
-          there.flags = 0;  // FIXME
-          EEPROM_writeAnything(address_for(route, waypoint), there);
-          state = ++waypoint > MAX_WAYPOINT ? PROGRAM_DONE : PROGRAM_UPDATE;
+          state = PROGRESS_SETUP;
+          nextstate = PROGRAM_STORE;
           break;
       }
       break;
     }
       
+    case PROGRAM_STORE: {
+      there.lat = here_lat;
+      there.lon = here_lon;  
+      there.tolerance = 30;  // FIXME
+      there.flags = 0;  // FIXME
+      EEPROM_writeAnything(address_for(route, waypoint), there);
+      state = ++waypoint > MAX_WAYPOINT ? PROGRAM_DONE : PROGRAM_UPDATE;
+      break;
+    }
+    
     case PROGRAM_DONE: {
       if (waypoint <= MAX_WAYPOINT) {
         there.lat = 0;
@@ -423,7 +430,7 @@ void loop() {
     
     case PROGRESS: {
       if ((millis() - statetimer) < 750) break;
-      state = ++progress < 15 ? PROGRESS_UPDATE : nextstate;
+      state = ++progress <= 15 ? PROGRESS_UPDATE : nextstate;
       break;
     }
       
