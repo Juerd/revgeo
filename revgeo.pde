@@ -35,18 +35,6 @@ void close_lock() {
   servo.write(90);
 }
 
-void print_bereik() {
-  int accuracy = gps.f_hor_acc();
-  lcd.print(
-      accuracy ==   0 ? "geen     "
-    : accuracy <  300 ? "geweldig "
-    : accuracy <  500 ? "goed     "
-    : accuracy < 1000 ? "matig    "
-    : accuracy < 2000 ? "slecht   "
-    :                   "vreselijk"
-  );
-}
-
 int address_for(byte route, byte waypoint) {
   return (route - 1) * 100 + (waypoint - 1) * 10;
 }
@@ -372,8 +360,6 @@ void loop() {
       switch (button.pressed()) {
         case NOT:
           lcd.setCursor(0, 3);
-//          print_bereik();
-          //lcd.print(gps.hor_acc()); lcd.print("   ");
           if (waypoint < 2) break;
           lcd.setCursor(0, 2);
           lcd.print("Tussenafstand:");
