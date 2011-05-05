@@ -344,7 +344,6 @@ void loop() {
       lcd.clear();
       lcd.print("Ga naar\nwaypoint ");
       lcd.print(waypoint, DEC);
-      //lcd.print(".\nBereik:\n\n");
       lcd.setCursor(0,4);
       lcd.print("WP       eindekort      lang");
       if (waypoint > 1) {
