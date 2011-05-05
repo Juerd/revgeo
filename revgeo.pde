@@ -26,12 +26,12 @@ void setup() {
 }
 
 void open_lock() {
-  servo_power.on(1000);
+  servo_power.on(10000);
   servo.write(180);
 }
 
 void close_lock() {
-  servo_power.on(1000);
+  servo_power.on(10000);
   servo.write(90);
 }
 
@@ -60,24 +60,26 @@ struct Waypoint {
   byte flags;
 };
 
-void loop() {
-  static enum {
-                                               CRASHED,
-     SELECT_ROUTE_SETUP,  SELECT_ROUTE_UPDATE, SELECT_ROUTE,
-     SELECT_TRIES_SETUP,  SELECT_TRIES_UPDATE, SELECT_TRIES,
-            CLOSE_SETUP,                       CLOSE,
-     WAIT_FOR_FIX_SETUP,  WAIT_FOR_FIX_UPDATE, WAIT_FOR_FIX,
-            ROUTE_SETUP,                                      ROUTE_DONE,
-         WAYPOINT_SETUP,      WAYPOINT_UPDATE, WAYPOINT,      WAYPOINT_DONE,
-             FAIL_SETUP,                       FAIL,
-    PROGRAM_YESNO_SETUP,                       PROGRAM_YESNO,
-          PROGRAM_SETUP,       PROGRAM_UPDATE, PROGRAM,       PROGRAM_DONE
-  } state = SELECT_ROUTE_SETUP;
+enum state_enum {
+                                             CRASHED,
+   SELECT_ROUTE_SETUP,  SELECT_ROUTE_UPDATE, SELECT_ROUTE,
+   SELECT_TRIES_SETUP,  SELECT_TRIES_UPDATE, SELECT_TRIES,
+          CLOSE_SETUP,                       CLOSE,
+   WAIT_FOR_FIX_SETUP,  WAIT_FOR_FIX_UPDATE, WAIT_FOR_FIX,
+          ROUTE_SETUP,                                      ROUTE_DONE,
+       WAYPOINT_SETUP,      WAYPOINT_UPDATE, WAYPOINT,      WAYPOINT_DONE,
+           FAIL_SETUP,                       FAIL,
+  PROGRAM_YESNO_SETUP,                       PROGRAM_YESNO,
+        PROGRAM_SETUP,       PROGRAM_UPDATE, PROGRAM,       PROGRAM_DONE,
+       PROGRESS_SETUP,      PROGRESS_UPDATE, PROGRESS,
+};
   
-  static byte          route, waypoint, tries_left, triesidx;
-  static byte          dotstate = 0;
-  static boolean       programming = false, yesno;
-  static unsigned long fix = 0;
+void loop() {
+
+  static state_enum    state = SELECT_ROUTE_SETUP, nextstate;
+  static byte          route, waypoint, tries_left, triesidx, progress;
+  static boolean       yesno;
+  static unsigned long fix = 0, statetimer = 0;
   static float         distance;
   static Waypoint      there;
   static float         here_lat, here_lon;
@@ -173,11 +175,13 @@ void loop() {
       if (button.pressed() != LONG) break;
       close_lock();
       state = WAIT_FOR_FIX_SETUP;
+      nextstate = ROUTE_SETUP;
       break;
     }
  
     case WAIT_FOR_FIX_SETUP: {
       fix = 0;
+      progress = 0;  // number of dots
       backlight.on(5000);
       lcd.clear();
       lcd.print("Wacht op\nGPS-fix...");
@@ -186,10 +190,12 @@ void loop() {
     }
       
     case WAIT_FOR_FIX_UPDATE: {
-      if (dotstate >= 100) dotstate = 0;
+      progress++;
+      if (progress > 4) progress = 1;
       lcd.setCursor(7, 1);
-      for (byte i = 0; i <= dotstate / 25; i++) lcd.print(".");
+      for (byte i = 0; i < progress; i++) lcd.print(".");
       lcd.print("    ");
+      statetimer = millis();
       state = WAIT_FOR_FIX;
       break;
     }
@@ -204,8 +210,8 @@ void loop() {
           break;
         default:
           if (fix && gps.hor_acc() < 500 && millis() - fix > 2000)
-            state = programming ? PROGRAM_SETUP : ROUTE_SETUP;
-          else if (++dotstate % 100)
+            state = nextstate;
+          else if ((millis() - statetimer) > 400) // fixme; slaat nergens op
             state = WAIT_FOR_FIX_UPDATE;
       }
       break;
@@ -218,9 +224,6 @@ void loop() {
     }
       
     case WAYPOINT_SETUP: {
-      lcd.clear();
-      lcd.print("Onderweg naar\nwaypoint ");
-      lcd.print(waypoint, DEC);
       EEPROM_readAnything(address_for(route, waypoint), there);
       tries_left = TRIES[triesidx];
       distance   = -1;
@@ -229,15 +232,18 @@ void loop() {
     }
     
     case WAYPOINT_UPDATE: {
-      backlight.on(15000);
+      lcd.clear();
+      lcd.print("Onderweg naar\nwaypoint ");
+      lcd.print(waypoint, DEC);
+      lcd.print(".\n");
       if (distance >= 0) {
-        lcd.setCursor(0, 2);
-        lcd.print("Afstand:\n");
+        lcd.print("Afstand: ");
         lcd.print(distance, 0);
-        lcd.print("m    ");
+        lcd.print("m      \n");
       }
       lcd.setCursor(0, 4);
-      lcd.print("Je mag nog ");
+      lcd.print("Je mag ");
+      lcd.print(waypoint > 1 && tries_left == TRIES[triesidx] ? "weer" : "nog");
       lcd.print(tries_left, DEC);
       lcd.print(" \nkeer drukken.");
       state = WAYPOINT;
@@ -246,9 +252,17 @@ void loop() {
       
     case WAYPOINT: {
       if (distance < 0 || !button.pressed()) break;
-      state = distance <= there.tolerance ? WAYPOINT_DONE
-            : --tries_left                ? WAYPOINT_UPDATE
-            :                               FAIL_SETUP;
+      if (distance <= there.tolerance) {
+        state = WAYPOINT_DONE;
+        break;
+      }
+      if (--tries_left) {
+        backlight.on(25000);
+        state = PROGRESS_SETUP;
+        nextstate = WAYPOINT_UPDATE;
+        break;
+      }
+      state = FAIL_SETUP;
       break;
     }
     
@@ -323,11 +337,10 @@ void loop() {
       switch (button.pressed()) {
         case SHORT:
           state = CLOSE_SETUP;
-          programming = 0;
           break;
         case LONG:
           state = WAIT_FOR_FIX_SETUP;
-          programming = 1;
+          nextstate = PROGRAM_SETUP;
           break;
       }
       break;
@@ -359,7 +372,7 @@ void loop() {
           lcd.setCursor(4, 2);
           if (waypoint < 2) break;
           lcd.print(distance, 0);
-          lcd.print("m    ");
+          lcd.print("m      ");
           break;
         case LONG:
           state = PROGRAM_DONE;
@@ -387,10 +400,33 @@ void loop() {
       lcd.clear();
       lcd.print("Programmeren\nafgerond.");
       delay(5000);
-      programming = false;
       state = SELECT_ROUTE_SETUP;
       break;
     }
+    
+    case PROGRESS_SETUP: {
+      lcd.clear();
+      lcd.print("Blijf waar je\nbent.\n\nWacht...");
+      progress = 0;
+      state = PROGRESS_UPDATE;
+      break; 
+    }
+    
+    case PROGRESS_UPDATE: {
+      statetimer = millis();
+      lcd.setCursor(0, 5);
+      for (byte i = 1; i < progress; i++)
+        lcd.print("\x80");
+      state = PROGRESS;
+      break; 
+    }
+    
+    case PROGRESS: {
+      if ((millis() - statetimer) < 750) break;
+      state = ++progress < 15 ? PROGRESS_UPDATE : nextstate;
+      break;
+    }
+      
   }
   delay(10);
 }
