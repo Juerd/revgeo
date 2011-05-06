@@ -253,17 +253,11 @@ void loop() {
       
     case WAYPOINT: {
       if (distance < 0 || !button.pressed()) break;
-      if (distance <= there.tolerance) {
-        state = WAYPOINT_DONE;
-        break;
-      }
-      if (--tries_left) {
-        backlight.on(25000);
-        state = PROGRESS_SETUP;
-        nextstate = WAYPOINT_UPDATE;
-        break;
-      }
-      state = FAIL_SETUP;
+      backlight.on(25000);
+      state = PROGRESS_SETUP;
+      nextstate = distance <= there.tolerance ? WAYPOINT_DONE
+                : --tries_left                ? WAYPOINT_UPDATE
+                :                               FAIL_SETUP;
       break;
     }
     
