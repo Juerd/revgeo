@@ -238,9 +238,9 @@ void loop() {
       lcd.print(waypoint, DEC);
       lcd.print(".\n");
       if (distance >= 0) {
-        lcd.print("Afstand: ");
+        lcd.print("Afstand:\n    ");
         lcd.print(distance, 0);
-        lcd.print("m      \n");
+        lcd.print(" m");
       }
       lcd.setCursor(0, 4);
       lcd.print("Je mag ");
@@ -373,7 +373,7 @@ void loop() {
           lcd.setCursor(4, 2);
           if (waypoint < 2) break;
           lcd.print(distance, 0);
-          lcd.print("m      ");
+          lcd.print(" m     ");
           break;
         case LONG:
           state = PROGRAM_DONE;
