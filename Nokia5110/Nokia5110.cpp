@@ -47,6 +47,7 @@ void Nokia5110::command(uint8_t value) {
 }
 
 void Nokia5110::data(uint8_t value) {
+    // For efficiency, write() and clear() do digitalWrite + _send themselves
     digitalWrite(_dc_pin, HIGH);
     _send(value);
 }
@@ -62,8 +63,9 @@ void Nokia5110::write(uint8_t character) {
     }
     char glyph[5];
     memcpy_P(glyph, GLYPHS + (character - 0x20) * 5, 5);
-    for (uint8_t i = 0; i < 5; i++) data(glyph[i]);
-    data(0);
+    digitalWrite(_dc_pin, HIGH);
+    for (uint8_t i = 0; i < 5; i++) _send(glyph[i]);
+    _send(0);
 }
 
 void Nokia5110::setCursor(uint8_t x, uint8_t y) {
@@ -77,7 +79,8 @@ void Nokia5110::home() {
 }
 
 void Nokia5110::clear () {
-    for (int i = 0; i < LCD_X * LCD_Y / 8; i++) data(0);
+    digitalWrite(_dc_pin, HIGH);
+    for (int i = 0; i < LCD_X * LCD_Y / 8; i++) _send(0);
     setCursor(0, 0);
 }
 
