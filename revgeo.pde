@@ -373,7 +373,7 @@ void loop() {
           lcd.setCursor(4, 2);
           if (waypoint < 2) break;
           lcd.print(distance, 0);
-          lcd.print(" m     ");
+          lcd.print(" m       ");
           break;
         case LONG:
           state = PROGRAM_DONE;
@@ -414,6 +414,7 @@ void loop() {
     case PROGRESS_SETUP: {
       lcd.clear();
       lcd.print("Blijf waar je\nbent.\n\nWacht...");
+      lcd.setCursor(0, 5);
       progress = 0;
       state = PROGRESS_UPDATE;
       break; 
@@ -421,16 +422,14 @@ void loop() {
     
     case PROGRESS_UPDATE: {
       statetimer = millis();
-      lcd.setCursor(0, 5);
-      for (byte i = 1; i < progress; i++)
-        lcd.print("\x80");
+      lcd.data(0xff);
       state = PROGRESS;
       break; 
     }
     
     case PROGRESS: {
-      if ((millis() - statetimer) < 750) break;
-      state = ++progress <= 15 ? PROGRESS_UPDATE : nextstate;
+      if ((millis() - statetimer) < 125) break;
+      state = ++progress < 84 ? PROGRESS_UPDATE : nextstate;
       break;
     }
       
