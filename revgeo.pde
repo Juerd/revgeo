@@ -379,6 +379,7 @@ void loop() {
           state = PROGRAM_DONE;
           break;
         case SHORT:
+          backlight.on(25000);
           state = PROGRESS_SETUP;
           nextstate = PROGRAM_STORE;
           break;
@@ -397,6 +398,7 @@ void loop() {
     }
     
     case PROGRAM_DONE: {
+      backlight.on(10000);
       if (waypoint <= MAX_WAYPOINT) {
         there.lat = 0;
         there.lon = 0;
