@@ -234,6 +234,7 @@ void loop() {
     
     case WAYPOINT_UPDATE: {
       lcd.clear();
+      backlight.on(15000);
       lcd.print("Onderweg naar\nwaypoint ");
       lcd.print(waypoint, DEC);
       lcd.print(".\n");
@@ -253,7 +254,6 @@ void loop() {
       
     case WAYPOINT: {
       if (distance < 0 || !button.pressed()) break;
-      backlight.on(25000);
       state = PROGRESS_SETUP;
       nextstate = distance <= there.tolerance ? WAYPOINT_DONE
                 : --tries_left                ? WAYPOINT_UPDATE
@@ -289,6 +289,7 @@ void loop() {
       
     case FAIL_SETUP: {
       lcd.clear();
+      backlight.on(15000);
       lcd.print("GAME OVER :(");
       while (there.lat && waypoint <= MAX_WAYPOINT)
         EEPROM_readAnything(address_for(route, ++waypoint), there);
@@ -373,7 +374,6 @@ void loop() {
           state = PROGRAM_DONE;
           break;
         case SHORT:
-          backlight.on(25000);
           state = PROGRESS_SETUP;
           nextstate = PROGRAM_STORE;
           break;
@@ -409,6 +409,7 @@ void loop() {
     
     case PROGRESS_SETUP: {
       lcd.clear();
+      backlight.on();
       lcd.print("Blijf waar je\nbent.\n\nWacht...");
       lcd.setCursor(0, 5);
       progress = 0;
