@@ -81,6 +81,7 @@ enum state_enum {
    WAIT_FOR_FIX_SETUP,  WAIT_FOR_FIX_UPDATE, WAIT_FOR_FIX,
           ROUTE_SETUP,                                      ROUTE_DONE,
        WAYPOINT_SETUP,      WAYPOINT_UPDATE, WAYPOINT,      WAYPOINT_DONE,
+                                                   WAYPOINT_CHECK,
            FAIL_SETUP,                       FAIL,
   PROGRAM_YESNO_SETUP,                       PROGRAM_YESNO,
         PROGRAM_SETUP,       PROGRAM_UPDATE, PROGRAM,       PROGRAM_DONE,
@@ -267,11 +268,17 @@ void loop() {
     case WAYPOINT: {
       if (distance < 0 || !button.pressed()) break;
       state = PROGRESS_SETUP;
-      nextstate = distance <= there.tolerance ? WAYPOINT_DONE
-                : --tries_left                ? WAYPOINT_UPDATE
-                :                               FAIL_SETUP;
+      nextstate = WAYPOINT_CHECK;
       break;
     }
+
+    case WAYPOINT_CHECK: {
+      state = distance <= there.tolerance ? WAYPOINT_DONE
+            : --tries_left                ? WAYPOINT_UPDATE
+            :                               FAIL_SETUP;
+      break;
+    }
+
     
     case WAYPOINT_DONE: {
       lcd.clear();
