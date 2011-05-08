@@ -11,6 +11,8 @@ const byte MAX_WAYPOINT  = 10;
 const byte MAX_ROUTE     = 10;
 const byte TRIES[]       = { 15, 25, 35 };
 
+const byte VPIN = A5;  // analogRead gives voltage / 5 * .31 * 1024
+
 Nokia5110     lcd(/*SCE*/7, /*RST*/8, /*DC*/9, /*SDIN*/11, /*SCLK*/12);
 NewSoftSerial nss(/*RX*/2, /*TX*/14);
 TinyGPS       gps;
@@ -48,8 +50,19 @@ void intro() {
   delay(1000);
   lcd.noInverse();
   delay(500);
-//  Serial.begin(9600);
   lcd.clear();
+  if (analogRead(VPIN) < 600) {
+    lcd.setCursor(2, 2);
+    lcd.print("VERVANG DE");
+    lcd.setCursor(2, 3);
+    lcd.print("BATTERIJEN"); 
+    for (;;) {
+      delay(400);
+      lcd.setInverse();
+      delay(400);
+      lcd.noInverse();
+    }
+  }
 }
 
 struct Waypoint {
@@ -76,7 +89,6 @@ enum state_enum {
 };
   
 void loop() {
-
   static state_enum    state = SELECT_ROUTE_SETUP, nextstate;
   static byte          route, waypoint, tries_left, triesidx, progress;
   static boolean       yesno;
