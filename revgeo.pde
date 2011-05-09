@@ -7,11 +7,18 @@
 #include <PowerPin.h>
 #include <Button.h>
 
-const byte MAX_WAYPOINT  = 10;
-const byte MAX_ROUTE     = 10;
-const byte TRIES[]       = { 15, 25, 35 };
+#define seconds (1000)
+#define second  (1000)
 
-const byte VPIN = A5;  // analogRead gives voltage / 5 * .31 * 1024
+const byte  MAX_WAYPOINT = 10;
+const byte  MAX_ROUTE    = 10;
+const byte  TRIES[]      = { 15, 25, 35 };
+
+const byte  VPIN         = A5;
+const float VFACTOR      = .31 / 5 * 1024;
+// .31 is *measured* ratio between voltage split resistors.
+const float MINIMUM_STARTUP_VOLTAGE = 9.8;
+const float EMERGENCY_OPEN_VOLTAGE  = 8.9;
 
 Nokia5110     lcd(/*SCE*/7, /*RST*/8, /*DC*/9, /*SDIN*/11, /*SCLK*/12);
 NewSoftSerial nss(/*RX*/2, /*TX*/14);
@@ -28,13 +35,17 @@ void setup() {
 }
 
 void open_lock() {
-  servo_power.on(1000);
+  servo_power.on(1 *second);
   servo.write(180);
 }
 
 void close_lock() {
-  servo_power.on(1000);
+  servo_power.on(1 *second);
   servo.write(90);
+}
+
+float battery_voltage() {
+  return analogRead(VPIN) / VFACTOR;
 }
 
 int address_for(byte route, byte waypoint) {
@@ -44,23 +55,23 @@ int address_for(byte route, byte waypoint) {
 void intro() {
   lcd.clear();
   backlight.on();
+  
   lcd.setInverse();
-  delay(500);
+  delay(1/2 *second);
+  
   lcd.print("\n\n    REV\n       GEO");
-  delay(1000);
+  delay(1 *second);
+  
   lcd.noInverse();
-  delay(500);
+  delay(1/2 *second);
+  
   lcd.clear();
-  if (analogRead(VPIN) < 600) {
-    lcd.setCursor(2, 2);
-    lcd.print("VERVANG DE");
-    lcd.setCursor(2, 3);
-    lcd.print("BATTERIJEN"); 
+  if (battery_voltage() < MINIMUM_STARTUP_VOLTAGE) {
+    lcd.setCursor(2, 2); lcd.print("VERVANG DE");
+    lcd.setCursor(2, 3); lcd.print("BATTERIJEN"); 
     for (;;) {
-      delay(400);
-      lcd.setInverse();
-      delay(400);
-      lcd.noInverse();
+      delay(0.4 *seconds); lcd.setInverse();
+      delay(0.4 *seconds); lcd.noInverse();
     }
   }
 }
@@ -93,10 +104,20 @@ void loop() {
   static state_enum    state = SELECT_ROUTE_SETUP, nextstate;
   static byte          route, waypoint, tries_left, triesidx, progress;
   static boolean       yesno;
-  static unsigned long fix = 0, statetimer = 0;
+  static unsigned long fix = 0, statetimer = 0, lastVcheck = 0;
   static float         distance;
   static Waypoint      there;
   static float         here_lat, here_lon;
+
+  if (millis() - lastVcheck > 10 *seconds) {
+    lastVcheck = millis();
+    if (battery_voltage() < EMERGENCY_OPEN_VOLTAGE) {
+      open_lock();
+      lcd.clear();
+      lcd.print("Slot is open\nomdat de\nbatterijen\nbijna leeg\nzijn.");
+      delay(10 *seconds);
+    }
+  }
 
   backlight.check();
   servo_power.check();
@@ -115,7 +136,7 @@ void loop() {
     case CRASHED: break;
     
     case SELECT_ROUTE_SETUP: {
-      open_lock();;
+      open_lock();
       route = 1;
       lcd.clear();
       lcd.print("Kies route.\n\n\n\nvolgende    OK\nkort      lang");
@@ -196,7 +217,7 @@ void loop() {
     case WAIT_FOR_FIX_SETUP: {
       fix = 0;
       progress = 0;  // number of dots
-      backlight.on(5000);
+      backlight.on(5 *seconds);
       lcd.clear();
       lcd.print("Wacht op\nGPS-fix...");
       state = WAIT_FOR_FIX_UPDATE;
@@ -223,7 +244,7 @@ void loop() {
           state = PROGRAM_YESNO_SETUP;
           break;
         default:
-          if (fix && gps.hor_acc() < 500 && millis() - fix > 2000)
+          if (fix && gps.hor_acc() < 500 && millis() - fix > 2 *seconds)
             state = nextstate;
           else if ((millis() - statetimer) > 400) // fixme; slaat nergens op
             state = WAIT_FOR_FIX_UPDATE;
@@ -247,7 +268,7 @@ void loop() {
     
     case WAYPOINT_UPDATE: {
       lcd.clear();
-      backlight.on(15000);
+      backlight.on(15 *seconds);
       lcd.print("Onderweg naar\nwaypoint ");
       lcd.print(waypoint, DEC);
       lcd.print(".\n");
@@ -286,7 +307,7 @@ void loop() {
       lcd.print("Waypoint ");
       lcd.print(waypoint,DEC);
       lcd.print("\nbereikt.");
-      delay(4000);
+      delay(4 *seconds);
       if (waypoint == MAX_WAYPOINT) {
         state = ROUTE_DONE;
         break;
@@ -298,7 +319,7 @@ void loop() {
     
     case ROUTE_DONE: {
       lcd.clear();
-      backlight.on(10000);
+      backlight.on(10 *seconds);
       open_lock();
       lcd.print("Gefeliciteerd!");
       lcd.print("Je bent er! :)");
@@ -308,7 +329,7 @@ void loop() {
       
     case FAIL_SETUP: {
       lcd.clear();
-      backlight.on(15000);
+      backlight.on(15 *seconds);
       lcd.print("GAME OVER :(");
       while (there.lat && waypoint <= MAX_WAYPOINT)
         EEPROM_readAnything(address_for(route, ++waypoint), there);
@@ -320,7 +341,7 @@ void loop() {
     }
     
     case FAIL: {
-      switch (button.pressed(60000)) {
+      switch (button.pressed(60 *seconds)) {
         case SHORT:
           backlight.on(1500);
           break;
@@ -368,7 +389,7 @@ void loop() {
     }
   
     case PROGRAM_UPDATE: {
-      backlight.on(15000);
+      backlight.on(15 *seconds);
       lcd.clear();
       lcd.print("Ga naar WP ");
       lcd.print(waypoint, DEC);
@@ -411,7 +432,7 @@ void loop() {
     }
     
     case PROGRAM_DONE: {
-      backlight.on(10000);
+      backlight.on(10 *seconds);
       if (waypoint <= MAX_WAYPOINT) {
         there.lat = 0;
         there.lon = 0;
@@ -421,7 +442,7 @@ void loop() {
       }
       lcd.clear();
       lcd.print("Programmeren\nafgerond.");
-      delay(5000);
+      delay(5 *seconds);
       state = SELECT_ROUTE_SETUP;
       break;
     }
