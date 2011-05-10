@@ -16,7 +16,8 @@ const byte  TRIES[]      = { 15, 25, 35 };
 
 const byte  VPIN         = A5;
 const float VFACTOR      = .31 / 5 * 1024;
-// .31 is *measured* ratio between voltage split resistors.
+// Vbatt--[68k]--VPIN--[120k]--GND
+// Theoretical factor is 68/(68+120) == .36, measured is .31
 const float MINIMUM_STARTUP_VOLTAGE = 9.8;
 const float EMERGENCY_OPEN_VOLTAGE  = 8.9;
 
@@ -34,14 +35,18 @@ void setup() {
   intro();
 }
 
+boolean lock_is_open = false;
+
 void open_lock() {
   servo_power.on(1 *second);
   servo.write(180);
+  lock_is_open = true;
 }
 
 void close_lock() {
   servo_power.on(1 *second);
   servo.write(90);
+  lock_is_open = false;
 }
 
 float battery_voltage() {
@@ -49,11 +54,26 @@ float battery_voltage() {
 }
 
 int address_for(byte route, byte waypoint) {
+  // route and waypoint are >= 1
   return (route - 1) * 100 + (waypoint - 1) * 10;
 }
 
 void intro() {
   lcd.clear();
+  
+  // Check voltage *before* using servo.
+  if (battery_voltage() < MINIMUM_STARTUP_VOLTAGE) {
+    lcd.setCursor(2, 2); lcd.print("VERVANG DE");
+    lcd.setCursor(2, 3); lcd.print("BATTERIJEN"); 
+    
+    // Draw attention and deny further usage
+    for (;;) {
+      delay(0.4 *seconds); lcd.setInverse();
+      delay(0.4 *seconds); lcd.noInverse();
+    }
+  }
+
+  open_lock();
   backlight.on();
   
   lcd.setInverse();
@@ -66,14 +86,6 @@ void intro() {
   delay(1/2 *second);
   
   lcd.clear();
-  if (battery_voltage() < MINIMUM_STARTUP_VOLTAGE) {
-    lcd.setCursor(2, 2); lcd.print("VERVANG DE");
-    lcd.setCursor(2, 3); lcd.print("BATTERIJEN"); 
-    for (;;) {
-      delay(0.4 *seconds); lcd.setInverse();
-      delay(0.4 *seconds); lcd.noInverse();
-    }
-  }
 }
 
 struct Waypoint {
@@ -99,7 +111,7 @@ enum state_enum {
                                                    PROGRAM_STORE,
        PROGRESS_SETUP,      PROGRESS_UPDATE, PROGRESS,
 };
-  
+
 void loop() {
   static state_enum    state = SELECT_ROUTE_SETUP, nextstate;
   static byte          route, waypoint, tries_left, triesidx, progress;
@@ -109,7 +121,7 @@ void loop() {
   static Waypoint      there;
   static float         here_lat, here_lon;
 
-  if (millis() - lastVcheck > 10 *seconds) {
+  if (lock_is_open && (millis() - lastVcheck > 10 *seconds)) {
     lastVcheck = millis();
     if (battery_voltage() < EMERGENCY_OPEN_VOLTAGE) {
       open_lock();
@@ -128,7 +140,10 @@ void loop() {
       unsigned long age;
       if (!fix) fix = millis();
       gps.f_get_position(&here_lat, &here_lon, &age);
-      distance = TinyGPS::distance_between(here_lat, here_lon, there.lat, there.lon);
+      distance = TinyGPS::distance_between(
+        here_lat, here_lon,
+        there.lat, there.lon
+      );
     }
   }
   
@@ -136,7 +151,6 @@ void loop() {
     case CRASHED: break;
     
     case SELECT_ROUTE_SETUP: {
-      open_lock();
       route = 1;
       lcd.clear();
       lcd.print("Kies route.\n\n\n\nvolgende    OK\nkort      lang");
@@ -246,7 +260,7 @@ void loop() {
         default:
           if (fix && gps.hor_acc() < 500 && millis() - fix > 2 *seconds)
             state = nextstate;
-          else if ((millis() - statetimer) > 400) // fixme; slaat nergens op
+          else if ((millis() - statetimer) > 400)
             state = WAIT_FOR_FIX_UPDATE;
       }
       break;
@@ -279,7 +293,11 @@ void loop() {
       }
       lcd.setCursor(0, 4);
       lcd.print("Je mag ");
-      lcd.print(waypoint > 1 && tries_left == TRIES[triesidx] ? "weer " : "nog ");
+      lcd.print(
+        waypoint > 1 && tries_left == TRIES[triesidx]
+        ? "weer "
+        : "nog "
+      );
       lcd.print(tries_left, DEC);
       lcd.print(" \nkeer drukken.");
       state = WAYPOINT;
@@ -331,9 +349,12 @@ void loop() {
       lcd.clear();
       backlight.on(15 *seconds);
       lcd.print("GAME OVER :(");
+
+      // Null terminated, so read until the null and then go back one entry.
       while (there.lat && waypoint <= MAX_WAYPOINT)
         EEPROM_readAnything(address_for(route, ++waypoint), there);
       EEPROM_readAnything(address_for(route, --waypoint), there);
+
       lcd.setCursor(0, 1);
       lcd.print("Afstand tot\neindpunt:\n");
       state = FAIL;
@@ -346,7 +367,7 @@ void loop() {
           backlight.on(1500);
           break;
         case LONG:
-          open_lock();  // backdoor
+          open_lock();  // Backdoor
           break;
       }
       lcd.print("\r");
@@ -434,6 +455,7 @@ void loop() {
     case PROGRAM_DONE: {
       backlight.on(10 *seconds);
       if (waypoint <= MAX_WAYPOINT) {
+        // Terminate with null
         there.lat = 0;
         there.lon = 0;
         there.tolerance = 0;
