@@ -12,7 +12,7 @@
 
 const byte  MAX_WAYPOINT = 10;
 const byte  MAX_ROUTE    = 10;
-const byte  TRIES[]      = { 15, 25, 35 };
+const byte  TRIES[]      = { 15, 20, 25 };
 
 const byte  VPIN         = A5;
 const float VFACTOR      = .31 / 5 * 1024;
@@ -83,7 +83,7 @@ void intro() {
   delay(1 *second);
   
   lcd.noInverse();
-  delay(1/2 *second);
+  delay(1 *second);
   
   lcd.clear();
 }
@@ -362,7 +362,7 @@ void loop() {
     }
     
     case FAIL: {
-      switch (button.pressed(60 *seconds)) {
+      switch (button.pressed(60000)) {  // 60 *seconds werkt niet!! :(
         case SHORT:
           backlight.on(1500);
           break;
