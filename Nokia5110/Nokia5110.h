@@ -121,7 +121,7 @@ class Nokia5110 : public Print {
             uint8_t sce_pin, uint8_t rst_pin, uint8_t dc_pin,
             uint8_t sdin_pin, uint8_t sclk_pin
         );
-        virtual void write(uint8_t);
+        virtual size_t write(uint8_t);
         void clear();
         void command(uint8_t);
         void data(uint8_t);

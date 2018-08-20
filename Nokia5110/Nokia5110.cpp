@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
-#include "WProgram.h"
+#include "Arduino.h"
 
 
 Nokia5110::Nokia5110(
@@ -26,7 +26,8 @@ Nokia5110::Nokia5110(
     digitalWrite(_rst_pin, HIGH);
 
     command(0x21);         // Extended command mode
-    command(0x80 | 0xB9);  // Contrast
+    command(0x80 | 0xC0);  // Contrast
+//    command(0x80 | 0xE0);  // Contrast (all black for testing)
     command(0x04);         // Temperature coefficient
     command(0x13);         // LCD bias mode 1:48
     command(0x20);         // Standard command mode
@@ -52,20 +53,21 @@ void Nokia5110::data(uint8_t value) {
     _send(value);
 }
 
-void Nokia5110::write(uint8_t character) {
+size_t Nokia5110::write(uint8_t character) {
     if (character == '\n') {
         setCursor(0, _y + 1);
-        return;
+        return 1;
     }
     if (character == '\r') {
         setCursor(0, _y);
-        return;
+        return 1;
     }
     char glyph[5];
     memcpy_P(glyph, GLYPHS + (character - 0x20) * 5, 5);
     digitalWrite(_dc_pin, HIGH);
     for (uint8_t i = 0; i < 5; i++) _send(glyph[i]);
     _send(0);
+    return 1;
 }
 
 void Nokia5110::setCursor(uint8_t x, uint8_t y) {
