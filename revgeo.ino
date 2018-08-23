@@ -2,7 +2,7 @@
 #include "AnythingEEPROM.h"
 #include <EEPROM.h>
 //#include <PWMServo.h>
-#include <TinyGPS.h>
+#include <TinyGPS++.h>
 #include <PowerPin.h>
 #include <Button.h>
 
@@ -21,19 +21,20 @@ const float MINIMUM_STARTUP_VOLTAGE = 3.6;
 const float EMERGENCY_OPEN_VOLTAGE  = 3.0;
 
 #define default_font u8g2_font_7x13B_tf
-static unsigned long fix = 0;  // millis of last position
+bool fix = 0;
 
 //Nokia5110     lcd(/*SCE*/7, /*RST*/8, /*DC*/9, /*SDIN*/11, /*SCLK*/12);
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C lcd(U8G2_R0);
 
 HardwareSerial gps_serial(2);
-TinyGPS       gps;
+TinyGPSPlus       gps;
 //PWMServo      servo;
 //PowerPin      servo_power(6);
 PowerPin      backlight(13);
 Button        button(14);
 int v_usb_pin = A10;
+int min_hdop = 210;
 
 void draw_icons(bool send = false) {
   lcd.setDrawColor(0);
@@ -55,8 +56,9 @@ void draw_icons(bool send = false) {
   }
   
   lcd.setFont(u8g2_font_open_iconic_all_2x_t);
-  int hdop = gps.hor_acc();
-  lcd.drawStr(128 - 16, 18, !fix ? "\xcf" : hdop < 150 ? "\xb1" : hdop < 250 ? "\xb2" : "\xb3");
+  int hdop = gps.hdop.value();
+  if (!hdop) hdop = 9999;
+  lcd.drawStr(128 - 16, 18, hdop <= min_hdop ? "\xb3" : hdop <= (min_hdop + 50) ? "\xb2" : hdop <= (min_hdop + 200) ? "\xb1" : "\xcf");
   lcd.setFont(default_font);
   if (send) lcd.sendBuffer();
 }
@@ -172,7 +174,7 @@ enum state_enum {
 };
 
 void loop() {
-  static state_enum    state = SELECT_ROUTE_SETUP, nextstate;
+  static state_enum    state = SELECT_ROUTE_SETUP, nextstate, nextnextstate;
   static byte          route, waypoint, tries_left, triesidx, progress;
   static boolean       yesno;
   static unsigned long statetimer = 0, lastVcheck = 0;
@@ -198,13 +200,13 @@ void loop() {
     Serial.print(c);
     if (gps.encode(c)) {
       unsigned long age;
-      if (!fix) fix = millis();
-      gps.f_get_position(&here_lat, &here_lon, &age);
-      distance = TinyGPS::distance_between(
-        here_lat, here_lon,
+      fix = gps.hdop.value() <= min_hdop;
+      //gps.f_get_position(&here_lat, &here_lon, &age);
+      distance = gps.distanceBetween(
+        gps.location.lat(), gps.location.lng(),
         there.lat, there.lon
       );
-      Serial.printf("%f/%f - %f/%f = %f\n", here_lat, here_lon, there.lat, there.lon, distance);
+      Serial.printf("\n%f/%f - %f/%f = %f (hdop = %d)", gps.location.lat(), gps.location.lng(), there.lat, there.lon, distance, gps.hdop.value());
     }
   }
 
@@ -301,7 +303,6 @@ void loop() {
     }
  
     case WAIT_FOR_FIX_SETUP: {
-      fix = 0;
       progress = 0;  // number of dots
       backlight.on(5 *seconds);
       clear();
@@ -334,10 +335,13 @@ void loop() {
           state = PROGRAM_YESNO_SETUP;
           break;
         default:
-          if (fix && gps.hor_acc() < 150 && millis() - fix > 2 *seconds)
+          if (gps.hdop.value() <= min_hdop) {
             state = nextstate;
-          else if ((millis() - statetimer) > 400)
+            nextstate = nextnextstate;
+          }
+          else if ((millis() - statetimer) > 400) {
             state = WAIT_FOR_FIX_UPDATE;
+          }
       }
       break;
     }
@@ -389,12 +393,16 @@ void loop() {
     }
 
     case WAYPOINT_CHECK: {
-      state = distance <= there.tolerance ? WAYPOINT_DONE
-            : --tries_left                ? WAYPOINT_UPDATE
-            :                               FAILURE_SETUP;
+      state = (gps.hdop.value() > min_hdop || gps.location.age() > 5 *seconds) ? WAIT_FOR_FIX_SETUP
+            : distance <= there.tolerance                                      ? WAYPOINT_DONE
+            : --tries_left                                                     ? WAYPOINT_UPDATE
+            :                                                                    FAILURE_SETUP;
+      if (state == WAIT_FOR_FIX_SETUP) {
+        nextstate = PROGRESS_SETUP;
+        nextnextstate = WAYPOINT_CHECK;
+      }
       break;
     }
-
     
     case WAYPOINT_DONE: {
       clear();
@@ -530,9 +538,9 @@ void loop() {
     }
       
     case PROGRAM_STORE: {
-      there.lat = here_lat;
-      there.lon = here_lon;  
-      there.tolerance = 15;  // FIXME
+      there.lat = gps.location.lat();
+      there.lon = gps.location.lng();  
+      there.tolerance = 20;  // FIXME
       there.flags = 0;  // FIXME
       EEPROM_writeAnything(address_for(route, waypoint), there);
       EEPROM.commit();
@@ -580,7 +588,12 @@ void loop() {
     
     case PROGRESS: {
       if ((millis() - statetimer) < 100) break;
-      state = ++progress < 128 ? PROGRESS_UPDATE : nextstate;
+      if (++progress < 128) {
+        state = PROGRESS_UPDATE;
+      } else {
+        state = nextstate;
+        nextstate = nextnextstate;
+      }
       break;
     }
       
