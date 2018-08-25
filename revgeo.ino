@@ -1,3 +1,10 @@
+#include <SPIFFS.h>
+
+#include <WebServer.h>
+#include <HTTP_Method.h>
+
+#include <WiFi.h>
+
 #include <U8g2lib.h>
 #include "AnythingEEPROM.h"
 #include <EEPROM.h>
@@ -15,8 +22,6 @@ const byte  TRIES[]      = { 15, 20, 25 };
 
 const byte  VPIN         = A13;
 const float VFACTOR      = 4096 / 7.4;
-// Vbatt--[68k]--VPIN--[120k]--GND
-// Theoretical factor is 68/(68+120) == .36, measured is .31
 const float MINIMUM_STARTUP_VOLTAGE = 3.6;
 const float EMERGENCY_OPEN_VOLTAGE  = 3.0;
 
@@ -82,11 +87,12 @@ void setup() {
   lcd.setFontPosTop();
   lcd.setFont(default_font);
   lcd.setFontMode(0);  // non-transparent background
-  for (int i = 0; i < 1024; i++) {
+  /*for (int i = 0; i < 1024; i++) {
     byte c = EEPROM.read(i);
     Serial.printf("%02x ", c);
     
-  }
+  }*/
+  webding();
   intro();
 }
 
@@ -599,4 +605,63 @@ void loop() {
       
   }
   delay(10);
+}
+
+WebServer http(80);
+
+
+void webding() {
+  uint64_t chipid = ESP.getEfuseMac();
+  char essid[16];
+  char* password = "password";
+  sprintf(essid, "revgeo-%04x", chipid);
+  WiFi.softAP(essid, password);
+  SPIFFS.begin(true);
+  delay(500);
+  lcd.clear();
+  uint32_t _ip = WiFi.softAPIP();
+  char ip[15];
+  sprintf(ip, "%d.%d.%d.%d", _ip & 0xff, _ip >> 8 & 0xff, _ip >> 16 & 0xff, _ip >> 24);
+  lcd.printf("WiFi\n  %s\npw:\n  %s\nhttp://\n  %s", essid, password, ip);
+  lcd.sendBuffer();
+  Serial.println(WiFi.softAPIP());
+  
+
+  http.on("/", HTTP_GET, []() {
+    String content = F("No user serviceable parts inside... :P\n\n");
+    File dir = SPIFFS.open("/routes", "r");
+    File f;
+    while (f = dir.openNextFile()) {
+      content += String(f.name()) + "\n";
+    }
+    http.send(200, "text/plain", content);
+  });
+  http.on("/write", HTTP_PUT, []() {
+    String filename = "/routes/" + http.arg("n") + ".json";
+    SPIFFS.mkdir("/routes");  // opportunistic; ignore result
+    File f = SPIFFS.open(filename, "w");
+    if (!f) {
+      http.send(500, "text/plain", "Write error");
+    }
+    f.print(http.arg("data"));
+    f.close();
+   
+    http.send(200, "text/plain", filename);
+  });
+  http.onNotFound([]() {
+    String filename = "/routes" + http.uri() + ".json";
+
+    File f = SPIFFS.open(filename, "r");
+    if (!f) {
+      http.send(404, "text/plain", "404: " + filename);
+      return;
+    }
+    http.streamFile(f, "text/plain");
+  });
+  http.begin();
+  
+  for (;;) {
+      digitalWrite(13, millis() % 1000 < 500);
+      http.handleClient();
+  }
 }
