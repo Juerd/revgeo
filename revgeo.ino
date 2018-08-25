@@ -32,12 +32,13 @@ bool fix = 0;
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C lcd(U8G2_R0);
 
+int button_pin = 14;
 HardwareSerial gps_serial(2);
 TinyGPSPlus       gps;
 //PWMServo      servo;
 //PowerPin      servo_power(6);
 PowerPin      backlight(13);
-Button        button(14);
+Button        button(button_pin);
 int v_usb_pin = A10;
 int min_hdop = 210;
 
@@ -92,7 +93,9 @@ void setup() {
     Serial.printf("%02x ", c);
     
   }*/
-  webding();
+  SPIFFS.begin(true);
+
+  if (digitalRead(button_pin) == LOW) webding();
   intro();
 }
 
@@ -181,7 +184,8 @@ enum state_enum {
 
 void loop() {
   static state_enum    state = SELECT_ROUTE_SETUP, nextstate, nextnextstate;
-  static byte          route, waypoint, tries_left, triesidx, progress;
+  static byte          waypoint, tries_left, triesidx, progress;
+  static File          dir, route;
   static boolean       yesno;
   static unsigned long statetimer = 0, lastVcheck = 0;
   static float         distance;
@@ -226,7 +230,8 @@ void loop() {
     case CRASHED: break;
     
     case SELECT_ROUTE_SETUP: {
-      route = 1;
+      dir = SPIFFS.open("/routes", "r");
+      route = dir.openNextFile();
       clear();
       lcd.print("Kies route.\n\n\n\nvolgende    OK\nkort      lang");
       lcd.sendBuffer();
@@ -235,10 +240,16 @@ void loop() {
     }
     
     case SELECT_ROUTE_UPDATE: {
+      lcd.setDrawColor(0);
+      lcd.drawBox(0,20,110,10);
+      lcd.setDrawColor(1);
+      
       lcd.setCursor(0,20);
-      lcd.print("Route #");
-      lcd.print(route, DEC);
-      lcd.print("  ");
+      lcd.print("\"");
+      String filename = route.name();
+      String display = filename.substring(strlen("/routes/"), filename.lastIndexOf('.'));
+      lcd.print(display);
+      lcd.print("\"");
       lcd.sendBuffer();
       state = SELECT_ROUTE;
       break;
@@ -247,8 +258,11 @@ void loop() {
     case SELECT_ROUTE: {
       switch (button.pressed()) {
         case SHORT:
-          route++;
-          if (route > MAX_ROUTE) route = 1;
+          route = dir.openNextFile();
+          if (!route) {
+            state = SELECT_ROUTE_SETUP;
+            break;
+          }
           state = SELECT_ROUTE_UPDATE;
           break;
         case LONG:
@@ -616,7 +630,6 @@ void webding() {
   char* password = "password";
   sprintf(essid, "revgeo-%04x", chipid);
   WiFi.softAP(essid, password);
-  SPIFFS.begin(true);
   delay(500);
   lcd.clear();
   uint32_t _ip = WiFi.softAPIP();
@@ -626,31 +639,62 @@ void webding() {
   lcd.sendBuffer();
   Serial.println(WiFi.softAPIP());
   
-
   http.on("/", HTTP_GET, []() {
-    String content = F("No user serviceable parts inside... :P\n\n");
+    String content = F(
+      "<script>"
+      "function del(p) {"
+        "if(!confirm('Delete?'))return;"
+        "var x=new XMLHttpRequest();x.onreadystatechange=function(){if(this.readyState==4)location=location};"
+        "x.open('DELETE',p);x.send()"
+       "}"
+       "function nw() {"
+         "location='/edit?fn=/routes/'+prompt('Name?')+'.json';"
+       "}"
+       "</script><button onclick='nw()'>Create new</button><p><table border=1 cellpadding=10;>"
+    );
     File dir = SPIFFS.open("/routes", "r");
     File f;
     while (f = dir.openNextFile()) {
-      content += String(f.name()) + "\n";
+      String filename = f.name();
+      content += "<tr><td><a href='" + filename + "'>" + filename.substring(strlen("/routes/"), filename.lastIndexOf('.'))
+      + "</a>"
+        "<td><a href='/edit?fn=" + filename + "'>edit</a>"
+        "<td><a href=x onclick='delete(\"" + filename + "\");return false'>delete</a>";
     }
-    http.send(200, "text/plain", content);
+    http.send(200, "text/html", content);
   });
-  http.on("/write", HTTP_PUT, []() {
-    String filename = "/routes/" + http.arg("n") + ".json";
-    SPIFFS.mkdir("/routes");  // opportunistic; ignore result
-    File f = SPIFFS.open(filename, "w");
-    if (!f) {
-      http.send(500, "text/plain", "Write error");
+  http.on("/edit", HTTP_ANY, []() {
+    String filename = http.arg("fn");
+    if (http.method() == HTTP_POST) {
+      SPIFFS.mkdir("/routes");  // opportunistic; ignore result
+      File f = SPIFFS.open(filename, "w");
+      if (!f) {
+        http.send(500, "text/plain", "Write error");
+      }
+      f.print(http.arg("data"));
+      f.close();
     }
-    f.print(http.arg("data"));
-    f.close();
-   
-    http.send(200, "text/plain", filename);
+    File f = SPIFFS.open(filename, "r");
+    String content =
+      "<a href='/'>Back without saving</a><p>"
+      "<form method=POST action=/edit><input name=fn value='" + filename + "'><br>"
+      "<textarea cols=80 rows=24 name=data>";
+    while (f.available()) {
+      char c = f.read();
+      if (c == '<') content += "&lt;"; else content += c;
+    }
+    content += "</textarea>"
+      "<input onclick='' type=submit value=Store>";
+   http.send(200, "text/html", content);
   });
   http.onNotFound([]() {
-    String filename = "/routes" + http.uri() + ".json";
+    String filename = http.uri();
 
+    if (http.method() == HTTP_DELETE) {
+      SPIFFS.remove(filename);
+      http.send(200, "text/plain", "Gone :(");
+      return;
+    }
     File f = SPIFFS.open(filename, "r");
     if (!f) {
       http.send(404, "text/plain", "404: " + filename);
