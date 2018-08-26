@@ -1,3 +1,5 @@
+#include <ArduinoJson.h>
+
 #include <SPIFFS.h>
 
 #include <WebServer.h>
@@ -18,7 +20,7 @@
 
 const byte  MAX_WAYPOINT = 10;
 const byte  MAX_ROUTE    = 10;
-const byte  TRIES[]      = { 15, 20, 25 };
+const byte  TRIES[]      = { 10, 15, 20 };
 
 const byte  VPIN         = A13;
 const float VFACTOR      = 4096 / 7.4;
@@ -26,7 +28,6 @@ const float MINIMUM_STARTUP_VOLTAGE = 3.6;
 const float EMERGENCY_OPEN_VOLTAGE  = 3.0;
 
 #define default_font u8g2_font_7x13B_tf
-bool fix = 0;
 
 //Nokia5110     lcd(/*SCE*/7, /*RST*/8, /*DC*/9, /*SDIN*/11, /*SCLK*/12);
 
@@ -40,11 +41,12 @@ TinyGPSPlus       gps;
 PowerPin      backlight(13);
 Button        button(button_pin);
 int v_usb_pin = A10;
-int min_hdop = 210;
+int min_hdop = 300;
+int recommended_hdop = 200;
 
 void draw_icons(bool send = false) {
   lcd.setDrawColor(0);
-  lcd.drawBox(128 - 16, 0, 16, 30);
+  lcd.drawBox(128 - 16, 0, 16, 35);
   lcd.setDrawColor(1);
   
   if (analogRead(v_usb_pin) > 1000) {
@@ -64,13 +66,15 @@ void draw_icons(bool send = false) {
   lcd.setFont(u8g2_font_open_iconic_all_2x_t);
   int hdop = gps.hdop.value();
   if (!hdop) hdop = 9999;
-  lcd.drawStr(128 - 16, 18, hdop <= min_hdop ? "\xb3" : hdop <= (min_hdop + 50) ? "\xb2" : hdop <= (min_hdop + 200) ? "\xb1" : "\xcf");
+  bool fix = gps.location.isValid() && gps.location.age() < 2000;
+  lcd.drawStr(128 - 16, 18, fix ? (hdop <= recommended_hdop ? "\xb3" : hdop <= min_hdop ? "\xb2" : "\xb1") : "\xcf");
   lcd.setFont(default_font);
   if (send) lcd.sendBuffer();
 }
 
 void clear() {
-  lcd.clear();
+  lcd.home();
+  lcd.clearBuffer();
   draw_icons();
 }
 
@@ -122,6 +126,17 @@ int address_for(byte route, byte waypoint) {
   return (route - 1) * 100 + (waypoint - 1) * 10;
 }
 
+bool reliable_fix() {
+  Serial.println("RELIABLE_FIX?\n1");
+  if (gps.hdop.value() > min_hdop) return false;
+  Serial.println("2");
+  if (! gps.location.isValid()) return false;
+  Serial.println("3");
+  if (gps.location.age() > 5 *seconds) return false;
+  Serial.println("Yes!");
+  return true;
+}
+
 void intro() {
   Serial.println("setup");
 
@@ -159,11 +174,11 @@ void intro() {
 }
 
 struct Waypoint {
-  // Don't alter struct; stored in EEPROM
   float lat;
   float lon;
   byte tolerance;
   byte flags;
+  String text;
 };
 
 enum state_enum {
@@ -184,11 +199,12 @@ enum state_enum {
 
 void loop() {
   static state_enum    state = SELECT_ROUTE_SETUP, nextstate, nextnextstate;
-  static byte          waypoint, tries_left, triesidx, progress;
-  static File          dir, route;
+  static byte          waypoint, max_waypoint, tries_left, triesidx, progress;
+  static File          dir, route_file;
   static boolean       yesno;
   static unsigned long statetimer = 0, lastVcheck = 0;
   static float         distance;
+  static Waypoint      waypoints[MAX_WAYPOINT] ;
   static Waypoint      there;
   static float         here_lat, here_lon;
 
@@ -207,16 +223,13 @@ void loop() {
 
   while (gps_serial.available()) {
     char c = gps_serial.read();
-    Serial.print(c);
+    //Serial.print(c);
     if (gps.encode(c)) {
-      unsigned long age;
-      fix = gps.hdop.value() <= min_hdop;
-      //gps.f_get_position(&here_lat, &here_lon, &age);
       distance = gps.distanceBetween(
         gps.location.lat(), gps.location.lng(),
         there.lat, there.lon
       );
-      Serial.printf("\n%f/%f - %f/%f = %f (hdop = %d)", gps.location.lat(), gps.location.lng(), there.lat, there.lon, distance, gps.hdop.value());
+      //Serial.printf("\n%f/%f - %f/%f = %f (hdop = %d)", gps.location.lat(), gps.location.lng(), there.lat, there.lon, distance, gps.hdop.value());
     }
   }
 
@@ -225,13 +238,13 @@ void loop() {
     once_every = 0;
     draw_icons(true);
   }
-  
+
   switch (state) {
     case CRASHED: break;
     
     case SELECT_ROUTE_SETUP: {
       dir = SPIFFS.open("/routes", "r");
-      route = dir.openNextFile();
+      route_file = dir.openNextFile();
       clear();
       lcd.print("Kies route.\n\n\n\nvolgende    OK\nkort      lang");
       lcd.sendBuffer();
@@ -241,15 +254,17 @@ void loop() {
     
     case SELECT_ROUTE_UPDATE: {
       lcd.setDrawColor(0);
-      lcd.drawBox(0,20,110,10);
+      lcd.drawBox(0,20,110,11);
       lcd.setDrawColor(1);
       
       lcd.setCursor(0,20);
-      lcd.print("\"");
-      String filename = route.name();
-      String display = filename.substring(strlen("/routes/"), filename.lastIndexOf('.'));
-      lcd.print(display);
-      lcd.print("\"");
+      if (route_file) {
+        String filename = route_file.name();
+        String display = "\"" + filename.substring(strlen("/routes/"), filename.lastIndexOf('.')) + "\"";
+        lcd.print(display);
+      } else {
+        lcd.print("NIEUWE MAKEN");
+      }
       lcd.sendBuffer();
       state = SELECT_ROUTE;
       break;
@@ -258,15 +273,15 @@ void loop() {
     case SELECT_ROUTE: {
       switch (button.pressed()) {
         case SHORT:
-          route = dir.openNextFile();
-          if (!route) {
+          if (!route_file) {  // *after* null, reset
             state = SELECT_ROUTE_SETUP;
             break;
           }
+          route_file = dir.openNextFile();  // null -> create new
           state = SELECT_ROUTE_UPDATE;
           break;
         case LONG:
-          state = SELECT_TRIES_SETUP;
+          state = route_file ? SELECT_TRIES_SETUP : PROGRAM_YESNO_SETUP;
           break;
       }
       break;
@@ -298,13 +313,14 @@ void loop() {
           state = SELECT_TRIES_UPDATE;
           break;
         case LONG:
-          state = CLOSE_SETUP;
+          //state = CLOSE_SETUP;
+          state = ROUTE_SETUP;
           break;
       }
       break;
     }
     
-    case CLOSE_SETUP: {
+    /*case CLOSE_SETUP: {
       clear();
       lcd.print("Mag de deksel \nop slot?");
       lcd.setCursor(0,40);
@@ -318,10 +334,29 @@ void loop() {
       if (button.pressed() != LONG) break;
       close_lock();
       state = WAIT_FOR_FIX_SETUP;
-      nextstate = ROUTE_SETUP;
+      nextstate = WAYPOINT_SETUP;
       break;
     }
- 
+    */
+   
+    case ROUTE_SETUP: {
+      waypoint = 1;
+      
+      DynamicJsonBuffer json;
+      JsonArray& wp = json.parseArray(route_file);
+      max_waypoint = wp.size();
+      for (int i = 0; i < max_waypoint; i++) {
+        waypoints[i].lat = wp[i]["coords"][0];
+        waypoints[i].lon = wp[i]["coords"][1];
+        waypoints[i].tolerance = wp[i]["tolerance"];
+        waypoints[i].text = wp[i]["text"].as<String>();
+      }
+
+      state = WAIT_FOR_FIX_SETUP;
+      nextstate = WAYPOINT_SETUP;
+      break;
+    }
+    
     case WAIT_FOR_FIX_SETUP: {
       progress = 0;  // number of dots
       backlight.on(5 *seconds);
@@ -331,7 +366,7 @@ void loop() {
       state = WAIT_FOR_FIX_UPDATE;
       break;
     }
-      
+    
     case WAIT_FOR_FIX_UPDATE: {
       progress++;
       if (progress > 4) progress = 1;
@@ -347,36 +382,26 @@ void loop() {
     }
     
     case WAIT_FOR_FIX: {
-      switch(button.pressed()) {
-        case SHORT:
-          backlight.on(1500);
-          break;
-        case LONG:
-          state = PROGRAM_YESNO_SETUP;
-          break;
-        default:
-          if (gps.hdop.value() <= min_hdop) {
-            state = nextstate;
-            nextstate = nextnextstate;
-          }
-          else if ((millis() - statetimer) > 400) {
-            state = WAIT_FOR_FIX_UPDATE;
-          }
+      if(button.pressed()) {
+        backlight.on(1500);
+      }
+      if (reliable_fix()) {
+        Serial.println("Fix\n");
+        Serial.println(nextstate);
+        state = nextstate;
+        nextstate = nextnextstate;
+      }
+      else if ((millis() - statetimer) > 400) {
+        state = WAIT_FOR_FIX_UPDATE;
       }
       break;
     }
       
-    case ROUTE_SETUP: {
-      waypoint = 1;
-      state = WAYPOINT_SETUP;
-      break;
-    }
-      
     case WAYPOINT_SETUP: {
-      EEPROM_readAnything(address_for(route, waypoint), there);
+      there = waypoints[waypoint - 1];
       tries_left = TRIES[triesidx];
       distance   = -1;
-      state = there.lat ? WAYPOINT_UPDATE : ROUTE_DONE;
+      state = WAYPOINT_UPDATE;
       break;
     }
     
@@ -407,16 +432,18 @@ void loop() {
       
     case WAYPOINT: {
       if (distance < 0 || !button.pressed()) break;
-      state = PROGRESS_SETUP;
-      nextstate = WAYPOINT_CHECK;
+      //state = PROGRESS_SETUP;
+      //nextstate = WAYPOINT_CHECK;
+      state = WAYPOINT_CHECK;  // terugzetten FIXME
       break;
     }
 
     case WAYPOINT_CHECK: {
-      state = (gps.hdop.value() > min_hdop || gps.location.age() > 5 *seconds) ? WAIT_FOR_FIX_SETUP
-            : distance <= there.tolerance                                      ? WAYPOINT_DONE
-            : --tries_left                                                     ? WAYPOINT_UPDATE
-            :                                                                    FAILURE_SETUP;
+      state = !reliable_fix               ? WAIT_FOR_FIX_SETUP
+            : distance <= there.tolerance ? WAYPOINT_DONE
+            : --tries_left                ? WAYPOINT_UPDATE
+            :                               FAILURE_SETUP;
+      
       if (state == WAIT_FOR_FIX_SETUP) {
         nextstate = PROGRESS_SETUP;
         nextnextstate = WAYPOINT_CHECK;
@@ -432,7 +459,7 @@ void loop() {
       lcd.print("\nbereikt.");
       lcd.sendBuffer();
       delay(4 *seconds);
-      if (waypoint == MAX_WAYPOINT) {
+      if (waypoint == max_waypoint) {
         state = ROUTE_DONE;
         break;
       }      
@@ -457,11 +484,8 @@ void loop() {
       backlight.on(15 *seconds);
       lcd.print("GAME OVER :(");
 
-      // Null terminated, so read until the null and then go back one entry.
-      while (there.lat && waypoint <= MAX_WAYPOINT)
-        EEPROM_readAnything(address_for(route, ++waypoint), there);
-      EEPROM_readAnything(address_for(route, --waypoint), there);
-
+      there = waypoints[max_waypoint - 1];
+      
       lcd.setCursor(0, 10);
       lcd.print("Afstand tot\neindpunt:\n");
       lcd.sendBuffer();
@@ -490,8 +514,7 @@ void loop() {
       yesno = false;
       clear();
       backlight.on();
-      lcd.print("Route ");
-      lcd.print(route, DEC);
+      lcd.print("Nieuwe route ");
       lcd.print("\nprogrammeren? ");
       lcd.setCursor(0,40);
       lcd.print("terug       OK\nkort      lang");
@@ -503,7 +526,7 @@ void loop() {
     case PROGRAM_YESNO: {
       switch (button.pressed()) {
         case SHORT:
-          state = CLOSE_SETUP;
+          state = SELECT_ROUTE_SETUP; //CLOSE_SETUP;
           break;
         case LONG:
           state = WAIT_FOR_FIX_SETUP;
@@ -560,25 +583,38 @@ void loop() {
     case PROGRAM_STORE: {
       there.lat = gps.location.lat();
       there.lon = gps.location.lng();  
-      there.tolerance = 20;  // FIXME
+      there.tolerance = 20;
+      there.text = "Waypoint {n}\nbereikt.";
       there.flags = 0;  // FIXME
-      EEPROM_writeAnything(address_for(route, waypoint), there);
-      EEPROM.commit();
+      waypoints[waypoint - 1] = there;
+      max_waypoint = waypoint;
       state = ++waypoint > MAX_WAYPOINT ? PROGRAM_DONE : PROGRAM_UPDATE;
       break;
     }
     
     case PROGRAM_DONE: {
       backlight.on(10 *seconds);
-      if (waypoint <= MAX_WAYPOINT) {
-        // Terminate with null
-        there.lat = 0;
-        there.lon = 0;
-        there.tolerance = 0;
-        there.flags = 0;
-        EEPROM_writeAnything(address_for(route, waypoint), there);
-        EEPROM.commit();
+      char filename[32];
+      sprintf(
+        filename,
+        "/routes/%04d%02d%02d-%02d%02d.json",
+        gps.date.year(), gps.date.month(), gps.date.day(),
+        gps.time.hour(), gps.time.minute()
+      );
+      File f = SPIFFS.open(filename, "w");
+      DynamicJsonBuffer json;
+      JsonArray& root = json.createArray();
+      for (int i = 0; i < max_waypoint; i++) {
+        JsonObject& wp = root.createNestedObject();
+        JsonArray& coords = wp.createNestedArray("coords");
+        coords.add(waypoints[i].lat);
+        coords.add(waypoints[i].lon);
+        wp["text"] = waypoints[i].text;
+        wp["tolerance"] = waypoints[i].tolerance;
       }
+      root.prettyPrintTo(f);
+      f.close();
+      
       clear();
       lcd.print("Programmeren\nafgerond.");
       lcd.sendBuffer();
@@ -642,15 +678,18 @@ void webding() {
   http.on("/", HTTP_GET, []() {
     String content = F(
       "<script>"
-      "function del(p) {"
+      "function rm(p) {"
         "if(!confirm('Delete?'))return;"
         "var x=new XMLHttpRequest();x.onreadystatechange=function(){if(this.readyState==4)location=location};"
         "x.open('DELETE',p);x.send()"
        "}"
-       "function nw() {"
+       "function create() {"
          "location='/edit?fn=/routes/'+prompt('Name?')+'.json';"
        "}"
-       "</script><button onclick='nw()'>Create new</button><p><table border=1 cellpadding=10;>"
+       "</script>"
+       "<h1>RevGeo routes</h1>"
+       "Note: This interface assumes you know what you're doing. Unsupported user input may result in overwritten data or a bricked device.<p>"
+       "<button onclick='create()'>Create new</button><p><table border=1 cellpadding=10;>"
     );
     File dir = SPIFFS.open("/routes", "r");
     File f;
@@ -659,7 +698,8 @@ void webding() {
       content += "<tr><td><a href='" + filename + "'>" + filename.substring(strlen("/routes/"), filename.lastIndexOf('.'))
       + "</a>"
         "<td><a href='/edit?fn=" + filename + "'>edit</a>"
-        "<td><a href=x onclick='delete(\"" + filename + "\");return false'>delete</a>";
+        "<td><a href='/mv?old=" + filename + "'>rename</a>"
+        "<td><a href=x onclick='rm(\"" + filename + "\");return false'>delete</a>";
     }
     http.send(200, "text/html", content);
   });
@@ -686,6 +726,22 @@ void webding() {
     content += "</textarea>"
       "<input onclick='' type=submit value=Store>";
    http.send(200, "text/html", content);
+  });
+  http.on("/mv", HTTP_GET, []() {
+    String o = http.arg("old");
+    http.send(200, "text/html", "<a href='/'>Back without saving</a>"
+      "<form action=/mv method=post>"
+      "<input type=hidden name=old value='" + o + "'>"
+      "New name: <input name=new value='" + o + "'> "
+      "<input type=submit value=Rename></form>"
+    );
+  });
+  http.on("/mv", HTTP_POST, []() {
+    String o = http.arg("old");
+    String n = http.arg("new");
+    SPIFFS.rename(o, n);
+    http.sendHeader("Location", "/");
+    http.send(302);
   });
   http.onNotFound([]() {
     String filename = http.uri();
