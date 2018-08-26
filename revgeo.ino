@@ -1,4 +1,5 @@
 //#define LOCKABLE
+#define S(f, ...) ({ char sprintfbuf[128]; snprintf(sprintfbuf, 128, f, __VA_ARGS__); sprintfbuf; })
 #define default_font u8g2_font_7x13B_tf
 
 #include <U8g2lib.h>
@@ -16,7 +17,6 @@ const float    MINIMUM_STARTUP_VOLTAGE = 3.6;
 const float    EMERGENCY_OPEN_VOLTAGE  = 3.0;
 
 const int      MAX_WAYPOINT = 10;
-const int      MAX_ROUTE    = 10;
 const byte     TRIES[]      = { 10, 15, 20 };
 const int      v_batt_pin   = A13;
 const int      button_pin = 14;
@@ -35,20 +35,21 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C lcd(U8G2_R0);
   int servo_pin = 10;
   PWMServo     servo;
   PowerPin      servo_power(6);
-  boolean       LOCKABLE_is_open = false;
+  boolean       lock = false;
 
-  void open_LOCKABLE() {
+  void open_lock() {
     servo_power.on(1000);
     servo.write(180);
-    LOCKABLE_is_open = true;
+    lock = true;
   }
 
-  void close_LOCKABLE() {
+  void close_lock() {
     servo_power.on(1000);
     servo.write(90);data
-    LOCKABLE_is_open = false;
+    lock = false;
   }
 #endif
+
 
 void draw_icons(bool send = false) {
   lcd.setDrawColor(0);
@@ -87,7 +88,7 @@ void clear() {
 void setup() {
   #ifdef LOCKABLE
     servo.attach(servo_pin); // pin 9 or 10 only
-    open_LOCKABLE();
+    open_lock();
   #endif
   gps_serial.begin(9600);
   Serial.begin(115200);
@@ -149,7 +150,7 @@ void intro() {
 struct Waypoint {
   double lat;
   double lon;
-  int tolerance;
+  int    tolerance;
   String text;
 };
 
@@ -157,7 +158,9 @@ enum state_enum {
                                              CRASHED,
    SELECT_ROUTE_SETUP,  SELECT_ROUTE_UPDATE, SELECT_ROUTE,
    SELECT_TRIES_SETUP,  SELECT_TRIES_UPDATE, SELECT_TRIES,
+#ifdef LOCKABLE
           CLOSE_SETUP,                       CLOSE,
+#endif
    WAIT_FOR_FIX_SETUP,  WAIT_FOR_FIX_UPDATE, WAIT_FOR_FIX,
           ROUTE_SETUP,                                      ROUTE_DONE,
        WAYPOINT_SETUP,      WAYPOINT_UPDATE, WAYPOINT,      WAYPOINT_DONE,
@@ -171,20 +174,19 @@ enum state_enum {
 
 void loop() {
   static state_enum    state = SELECT_ROUTE_SETUP, nextstate, nextnextstate;
-  static byte          waypoint, max_waypoint, tries_left, triesidx, progress;
+  static int           waypoint, max_waypoint, tries_left, triesidx, progress;
   static File          dir, route_file;
-  static boolean       yesno;
-  static unsigned long statetimer = 0, lastVcheck = 0;
-  static float         distance;
+  static unsigned long statetimer = 0;
+  static double        distance;
   static Waypoint      waypoints[MAX_WAYPOINT] ;
   static Waypoint      there;
-  static float         here_lat, here_lon;
 
   #ifdef LOCKABLE
-    if (LOCKABLE_is_open && (millis() - lastVcheck > 10000)) {
+    static unsigned long lastVcheck = 0;
+    if (lock && (millis() - lastVcheck > 10000)) {
       lastVcheck = millis();
       if (battery_voltage() < EMERGENCY_OPEN_VOLTAGE) {
-        open_LOCKABLE();
+        open_lock();
         clear();
         lcd.print("Slot is open\nomdat de\nbatterijen\nbijna leeg\nzijn.");
         delay(10000);
@@ -250,7 +252,7 @@ void loop() {
             state = SELECT_ROUTE_SETUP;
             break;
           }
-          route_file = dir.openNextFile();  // null -> create new
+          route_file = dir.openNextFile();  // keep null: special cased for new route
           state = SELECT_ROUTE_UPDATE;
           break;
         case LONG:
@@ -307,7 +309,7 @@ void loop() {
     }
     case CLOSE: {
       if (button.pressed() != LONG) break;
-      close_LOCKABLE();
+      close_lock();
       state = ROUTE_SETUP;
       break;
     }
@@ -368,7 +370,7 @@ void loop() {
       }
       break;
     }
-      
+
     case WAYPOINT_SETUP: {
       there = waypoints[waypoint - 1];
       tries_left = TRIES[triesidx];
@@ -382,7 +384,7 @@ void loop() {
       backlight.on(15000);
       lcd.printf("Onderweg naar\nwaypoint %d.\n", waypoint);
       if (distance >= 0) {
-        lcd.printf("Afstand:\n    %d m", distance);
+        lcd.printf("Afstand:\n    %d m", int(distance));
       }
       lcd.setCursor(0, 40);
       lcd.printf(
@@ -403,7 +405,7 @@ void loop() {
     }
 
     case WAYPOINT_CHECK: {
-      state = !reliable_fix               ? WAIT_FOR_FIX_SETUP
+      state = !reliable_fix()             ? WAIT_FOR_FIX_SETUP
             : distance <= there.tolerance ? WAYPOINT_DONE
             : --tries_left                ? WAYPOINT_UPDATE
             :                               FAILURE_SETUP;
@@ -420,9 +422,7 @@ void loop() {
       backlight.on();
       
       String text = there.text;
-      char n[3];
-      sprintf(n, "%d", waypoint);
-      text.replace("{n}", n);
+      text.replace("{n}", S("%d", waypoint));
       
       lcd.print(text);
       lcd.sendBuffer();
@@ -440,7 +440,7 @@ void loop() {
       clear();
       backlight.on(10000);
       #ifdef LOCKABLE
-        open_LOCKABLE();
+        open_lock();
       #endif
       lcd.print("Gefeliciteerd!\nJe bent er! :)");
       lcd.sendBuffer();
@@ -469,7 +469,7 @@ void loop() {
         }
         #ifdef LOCKABLE
           case LONG: {
-            open_LOCKABLE();  // Backdoor
+            open_lock();  // Backdoor
             break;
           }
         #endif
@@ -485,7 +485,6 @@ void loop() {
     }
     
     case PROGRAM_YESNO_SETUP: {
-      yesno = false;
       clear();
       backlight.on();
       lcd.print("Nieuwe route\nprogrammeren?");
@@ -566,9 +565,7 @@ void loop() {
     
     case PROGRAM_DONE: {
       backlight.on(10000);
-      char filename[32];
-      sprintf(
-        filename,
+      char* filename = S(
         "/routes/%04d%02d%02d-%02d%02d.json",
         gps.date.year(), gps.date.month(), gps.date.day(),
         gps.time.hour(), gps.time.minute()
@@ -638,19 +635,41 @@ void loop() {
 #include <HTTP_Method.h>
 WebServer http(80);
 
+const char* pwgen() {
+  const int   max_length = 32;
+  const char* filename   = "/softap-password.txt";
+  const char* passchars  = "ABCEFGHJKLMNPRSTUXYZabcdefhkmnorstvxz23456789-#@%^<>";
+  
+  File pwfile = SPIFFS.open(filename, "r");
+  String password = pwfile.readString();
+  pwfile.close();
+
+  if (password.length() == 0 || password.length() > max_length) {
+    for (int i = 0; i < 8; i++) {
+       password.concat( passchars[random(strlen(passchars))] );
+    }
+    File pwfile = SPIFFS.open(filename, "w");
+    pwfile.print(password);
+    pwfile.close();
+  }
+  
+  static char stringbuf[max_length + 1];
+  strncpy(stringbuf, password.c_str(), sizeof(stringbuf));
+  return stringbuf;
+}
+
 void webding() {
-  char essid[16];
-  uint64_t chipid = ESP.getEfuseMac();
-  sprintf(essid, "revgeo-%04x", ESP.getEfuseMac());
-  char* password = "password";
+  const char* essid = S("revgeo-%llx", ESP.getEfuseMac());  // truncated; fingers crossed!
+  const char* password = pwgen();
+  
   WiFi.softAP(essid, password);
   delay(500);
   uint32_t _ip = WiFi.softAPIP();
   
-  char ip[15];
-  sprintf(ip, "%d.%d.%d.%d", _ip & 0xff, _ip >> 8 & 0xff, _ip >> 16 & 0xff, _ip >> 24);
-  clear();
-  lcd.printf("WiFi\n  %s\npw:\n  %s\nhttp://\n  %s", essid, password, ip);
+  const char* ip = S("%d.%d.%d.%d", (_ip & 0xff), (_ip >> 8 & 0xff), (_ip >> 16 & 0xff), (_ip >> 24));
+  lcd.clear();
+  lcd.setFont(u8g2_font_6x12_tf);
+  lcd.printf("WiFi:\n %s\npw:\n %s\n\nhttp://%s/", essid, password, ip);
   lcd.sendBuffer();
   
   http.on("/", HTTP_GET, []() {
@@ -676,8 +695,7 @@ void webding() {
       "<td><a href=x onclick='rm(\"{f}\");return false'>delete</a>";
 
     File dir = SPIFFS.open("/routes", "r");
-    File f;
-    while (f = dir.openNextFile()) {
+    while (File f = dir.openNextFile()) {
       String filename = f.name();
       String td = td_template;
       td.replace("{f}", filename);
@@ -699,17 +717,16 @@ void webding() {
     
     if (http.method() == HTTP_POST) {
       SPIFFS.mkdir("/routes");  // opportunistic; ignore result
-      File f = SPIFFS.open(filename, "w");
-      if (!f) {
+      
+      if (File f = SPIFFS.open(filename, "w")) {
+        f.print(http.arg("data"));
+        f.close();
+      } else {
         http.send(500, "text/plain", "Write error");
       }
-      f.print(http.arg("data"));
-      f.close();
     }
     
-    String json;
-    File f = SPIFFS.open(filename, "r");
-    while (f.available()) json += char(f.read());
+    String json = SPIFFS.open(filename, "r").readString();
     json.replace("<", "&lt;");
     
     content.replace("{f}", filename);
@@ -744,12 +761,12 @@ void webding() {
       http.send(200, "text/plain", "Gone :(");
       return;
     }
-    File f = SPIFFS.open(filename, "r");
-    if (!f) {
+    
+    if (File f = SPIFFS.open(filename, "r")) {
+      http.streamFile(f, "text/plain");
+    } else {
       http.send(404, "text/plain", "404: " + filename);
-      return;
     }
-    http.streamFile(f, "text/plain");
   });
   
   http.begin();
