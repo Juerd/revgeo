@@ -19,7 +19,7 @@
 class Button {
     public:
         Button(uint8_t pin);
-        uint8_t pressed(unsigned long threshold = 500);
+        uint8_t pressed(unsigned long threshold = 400);
     private:
         uint8_t _pin;
         unsigned long _begin_time;

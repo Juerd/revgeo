@@ -1,48 +1,54 @@
-#include <ArduinoJson.h>
-
-#include <SPIFFS.h>
-
-#include <WebServer.h>
-#include <HTTP_Method.h>
-
-#include <WiFi.h>
+//#define LOCKABLE
+#define default_font u8g2_font_7x13B_tf
 
 #include <U8g2lib.h>
-#include "AnythingEEPROM.h"
-#include <EEPROM.h>
-//#include <PWMServo.h>
 #include <TinyGPS++.h>
 #include <PowerPin.h>
 #include <Button.h>
+#include <SPIFFS.h>
+#include <ArduinoJson.h>
+#ifdef LOCKABLE
+  #include <PWMServo.h>
+#endif
 
-#define seconds (1000)
-#define second  (1000)
+const float    VFACTOR      = 4096 / 7.4;
+const float    MINIMUM_STARTUP_VOLTAGE = 3.6;
+const float    EMERGENCY_OPEN_VOLTAGE  = 3.0;
 
-const byte  MAX_WAYPOINT = 10;
-const byte  MAX_ROUTE    = 10;
-const byte  TRIES[]      = { 10, 15, 20 };
+const int      MAX_WAYPOINT = 10;
+const int      MAX_ROUTE    = 10;
+const byte     TRIES[]      = { 10, 15, 20 };
+const int      v_batt_pin   = A13;
+const int      button_pin = 14;
+const int      v_usb_pin = A10;
+const int      min_hdop = 300;
+const int      recommended_hdop = 200;
 
-const byte  VPIN         = A13;
-const float VFACTOR      = 4096 / 7.4;
-const float MINIMUM_STARTUP_VOLTAGE = 3.6;
-const float EMERGENCY_OPEN_VOLTAGE  = 3.0;
-
-#define default_font u8g2_font_7x13B_tf
-
-//Nokia5110     lcd(/*SCE*/7, /*RST*/8, /*DC*/9, /*SDIN*/11, /*SCLK*/12);
+HardwareSerial gps_serial(2);
+TinyGPSPlus   gps;
+PowerPin       backlight(13);
+Button         button(button_pin);
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C lcd(U8G2_R0);
 
-int button_pin = 14;
-HardwareSerial gps_serial(2);
-TinyGPSPlus       gps;
-//PWMServo      servo;
-//PowerPin      servo_power(6);
-PowerPin      backlight(13);
-Button        button(button_pin);
-int v_usb_pin = A10;
-int min_hdop = 300;
-int recommended_hdop = 200;
+#ifdef LOCKABLE
+  int servo_pin = 10;
+  PWMServo     servo;
+  PowerPin      servo_power(6);
+  boolean       LOCKABLE_is_open = false;
+
+  void open_LOCKABLE() {
+    servo_power.on(1000);
+    servo.write(180);
+    LOCKABLE_is_open = true;
+  }
+
+  void close_LOCKABLE() {
+    servo_power.on(1000);
+    servo.write(90);data
+    LOCKABLE_is_open = false;
+  }
+#endif
 
 void draw_icons(bool send = false) {
   lcd.setDrawColor(0);
@@ -79,70 +85,42 @@ void clear() {
 }
 
 void setup() {
-//  servo.attach(10); // pin 9 or 10 only
-  EEPROM.begin(1024);
+  #ifdef LOCKABLE
+    servo.attach(servo_pin); // pin 9 or 10 only
+    open_LOCKABLE();
+  #endif
   gps_serial.begin(9600);
   Serial.begin(115200);
   Serial.println("setup");
   pinMode(14, INPUT_PULLUP);
-  //pinMode(v_usb_pin, INPUT_PULLDOWN);
   lcd.begin();
   lcd.setContrast(255);
   lcd.setLineHeight(10);
   lcd.setFontPosTop();
   lcd.setFont(default_font);
   lcd.setFontMode(0);  // non-transparent background
-  /*for (int i = 0; i < 1024; i++) {
-    byte c = EEPROM.read(i);
-    Serial.printf("%02x ", c);
-    
-  }*/
+
   SPIFFS.begin(true);
 
   if (digitalRead(button_pin) == LOW) webding();
   intro();
 }
 
-boolean lock_is_open = false;
-
-void open_lock() {
-//  servo_power.on(1 *second);
-//  servo.write(180);
-  lock_is_open = true;
-}
-
-void close_lock() {
-//  servo_power.on(1 *second);
-//  servo.write(90);data
-  lock_is_open = false;
-}
 
 float battery_voltage() {
-  return analogRead(VPIN) / VFACTOR;
-}
-
-int address_for(byte route, byte waypoint) {
-  // route and waypoint are >= 1
-  return (route - 1) * 100 + (waypoint - 1) * 10;
+  return analogRead(v_batt_pin) / VFACTOR;
 }
 
 bool reliable_fix() {
-  Serial.println("RELIABLE_FIX?\n1");
   if (gps.hdop.value() > min_hdop) return false;
-  Serial.println("2");
   if (! gps.location.isValid()) return false;
-  Serial.println("3");
-  if (gps.location.age() > 5 *seconds) return false;
-  Serial.println("Yes!");
+  if (gps.location.age() > 5000) return false;
   return true;
 }
 
 void intro() {
-  Serial.println("setup");
-
   clear();
   
-  // Check voltage *before* using servo.
   if (battery_voltage() < MINIMUM_STARTUP_VOLTAGE) {
     Serial.println("batt");
     lcd.setCursor(0, 10);
@@ -151,33 +129,27 @@ void intro() {
     lcd.setContrast(5);
     // Draw attention and deny further usage
     for (;;) {
-      delay(0.4 *seconds); lcd.setPowerSave(true);  // display off
-      delay(0.4 *seconds); lcd.setPowerSave(false);
+      delay(400); lcd.setPowerSave(true);  // display off
+      delay(400); lcd.setPowerSave(false);
     }
   }
 
-  open_lock();
   backlight.on();
   
-  //lcd.setInverse();
-  delay(1/2 *second);
+  delay(500);
   clear();
   lcd.print("\n\n    REV\n       GEO\n\n");
   lcd.sendBuffer();
-  delay(1 *second);
+  delay(2000);
   
-  //lcd.noInverse();
-  delay(1 *second);
   clear();
   Serial.println("setup klaar");
-  
 }
 
 struct Waypoint {
-  float lat;
-  float lon;
-  byte tolerance;
-  byte flags;
+  double lat;
+  double lon;
+  int tolerance;
   String text;
 };
 
@@ -208,28 +180,29 @@ void loop() {
   static Waypoint      there;
   static float         here_lat, here_lon;
 
-  if (lock_is_open && (millis() - lastVcheck > 10 *seconds)) {
-    lastVcheck = millis();
-    if (battery_voltage() < EMERGENCY_OPEN_VOLTAGE) {
-      open_lock();
-      clear();
-      lcd.print("Slot is open\nomdat de\nbatterijen\nbijna leeg\nzijn.");
-      delay(10 *seconds);
+  #ifdef LOCKABLE
+    if (LOCKABLE_is_open && (millis() - lastVcheck > 10000)) {
+      lastVcheck = millis();
+      if (battery_voltage() < EMERGENCY_OPEN_VOLTAGE) {
+        open_LOCKABLE();
+        clear();
+        lcd.print("Slot is open\nomdat de\nbatterijen\nbijna leeg\nzijn.");
+        delay(10000);
+      }
     }
-  }
-
+    servo_power.check();
+  #endif
+  
   backlight.check();
-  //servo_power.check();
-
+  
   while (gps_serial.available()) {
     char c = gps_serial.read();
-    //Serial.print(c);
+    // Serial.print(c);
     if (gps.encode(c)) {
       distance = gps.distanceBetween(
         gps.location.lat(), gps.location.lng(),
         there.lat, there.lon
       );
-      //Serial.printf("\n%f/%f - %f/%f = %f (hdop = %d)", gps.location.lat(), gps.location.lng(), there.lat, there.lon, distance, gps.hdop.value());
     }
   }
 
@@ -254,7 +227,7 @@ void loop() {
     
     case SELECT_ROUTE_UPDATE: {
       lcd.setDrawColor(0);
-      lcd.drawBox(0,20,110,11);
+      lcd.drawBox(0,20,110,12);
       lcd.setDrawColor(1);
       
       lcd.setCursor(0,20);
@@ -298,8 +271,7 @@ void loop() {
     
     case SELECT_TRIES_UPDATE: {
       lcd.setCursor(0,20);
-      lcd.print(TRIES[triesidx], DEC);
-      lcd.print(" pogingen  ");
+      lcd.printf("%d pogingen  ", TRIES[triesidx]);
       lcd.sendBuffer();
       state = SELECT_TRIES;
       break;
@@ -313,14 +285,18 @@ void loop() {
           state = SELECT_TRIES_UPDATE;
           break;
         case LONG:
-          //state = CLOSE_SETUP;
-          state = ROUTE_SETUP;
+          #ifdef LOCKABLE
+            state = CLOSE_SETUP;
+          #else 
+            state = ROUTE_SETUP;
+          #endif
           break;
       }
       break;
     }
-    
-    /*case CLOSE_SETUP: {
+
+    #ifdef LOCKABLE
+    case CLOSE_SETUP: {
       clear();
       lcd.print("Mag de deksel \nop slot?");
       lcd.setCursor(0,40);
@@ -329,15 +305,13 @@ void loop() {
       state = CLOSE;
       break;
     }
-    
     case CLOSE: {
       if (button.pressed() != LONG) break;
-      close_lock();
-      state = WAIT_FOR_FIX_SETUP;
-      nextstate = WAYPOINT_SETUP;
+      close_LOCKABLE();
+      state = ROUTE_SETUP;
       break;
     }
-    */
+    #endif
    
     case ROUTE_SETUP: {
       waypoint = 1;
@@ -359,7 +333,7 @@ void loop() {
     
     case WAIT_FOR_FIX_SETUP: {
       progress = 0;  // number of dots
-      backlight.on(5 *seconds);
+      backlight.on(5000);
       clear();
       lcd.print("Wacht op\nGPS-fix...");
       lcd.sendBuffer();
@@ -386,8 +360,6 @@ void loop() {
         backlight.on(1500);
       }
       if (reliable_fix()) {
-        Serial.println("Fix\n");
-        Serial.println(nextstate);
         state = nextstate;
         nextstate = nextnextstate;
       }
@@ -407,24 +379,17 @@ void loop() {
     
     case WAYPOINT_UPDATE: {
       clear();
-      backlight.on(15 *seconds);
-      lcd.print("Onderweg naar\nwaypoint ");
-      lcd.print(waypoint, DEC);
-      lcd.print(".\n");
+      backlight.on(15000);
+      lcd.printf("Onderweg naar\nwaypoint %d.\n", waypoint);
       if (distance >= 0) {
-        lcd.print("Afstand:\n    ");
-        lcd.print(distance, 0);
-        lcd.print(" m");
+        lcd.printf("Afstand:\n    %d m", distance);
       }
       lcd.setCursor(0, 40);
-      lcd.print("Je mag ");
-      lcd.print(
-        waypoint > 1 && tries_left == TRIES[triesidx]
-        ? "weer "
-        : "nog "
+      lcd.printf(
+        "Je mag %s %d \nkeer drukken.",
+        (waypoint > 1 && tries_left == TRIES[triesidx] ? "weer" : "nog"),
+        tries_left
       );
-      lcd.print(tries_left, DEC);
-      lcd.print(" \nkeer drukken.");
       lcd.sendBuffer();
       state = WAYPOINT;
       break;
@@ -432,9 +397,8 @@ void loop() {
       
     case WAYPOINT: {
       if (distance < 0 || !button.pressed()) break;
-      //state = PROGRESS_SETUP;
-      //nextstate = WAYPOINT_CHECK;
-      state = WAYPOINT_CHECK;  // terugzetten FIXME
+      state = PROGRESS_SETUP;
+      nextstate = WAYPOINT_CHECK;
       break;
     }
 
@@ -454,11 +418,15 @@ void loop() {
     case WAYPOINT_DONE: {
       clear();
       backlight.on();
-      lcd.print("Waypoint ");
-      lcd.print(waypoint,DEC);
-      lcd.print("\nbereikt.");
+      
+      String text = there.text;
+      char n[3];
+      sprintf(n, "%d", waypoint);
+      text.replace("{n}", n);
+      
+      lcd.print(text);
       lcd.sendBuffer();
-      delay(4 *seconds);
+      delay(4000);
       if (waypoint == max_waypoint) {
         state = ROUTE_DONE;
         break;
@@ -470,10 +438,11 @@ void loop() {
     
     case ROUTE_DONE: {
       clear();
-      backlight.on(10 *seconds);
-      open_lock();
-      lcd.print("Gefeliciteerd!\n");
-      lcd.print("Je bent er! :)");
+      backlight.on(10000);
+      #ifdef LOCKABLE
+        open_LOCKABLE();
+      #endif
+      lcd.print("Gefeliciteerd!\nJe bent er! :)");
       lcd.sendBuffer();
       state = CRASHED;
       break;
@@ -481,41 +450,45 @@ void loop() {
       
     case FAILURE_SETUP: {
       clear();
-      backlight.on(15 *seconds);
-      lcd.print("GAME OVER :(");
+      backlight.on(15000);
+      lcd.println("GAME OVER :(");
 
       there = waypoints[max_waypoint - 1];
       
-      lcd.setCursor(0, 10);
-      lcd.print("Afstand tot\neindpunt:\n");
+      lcd.println("Afstand tot\neindpunt:");
       lcd.sendBuffer();
       state = FAILURE;
       break;
     }
     
     case FAILURE: {
-      switch (button.pressed(60000)) {  // 60 *seconds werkt niet!! :(
-        case SHORT:
+      switch (button.pressed(60000)) {  // 60000 werkt niet!! :(
+        case SHORT: {
           backlight.on(1500);
           break;
-        case LONG:
-          open_lock();  // Backdoor
-          break;
+        }
+        #ifdef LOCKABLE
+          case LONG: {
+            open_LOCKABLE();  // Backdoor
+            break;
+          }
+        #endif
       }
-      lcd.print("\r");
+      lcd.setDrawColor(0);
+      lcd.drawBox(0,30,110,12);
+      lcd.setDrawColor(1);
+      lcd.setCursor(0, 30);
       lcd.print(distance, 0);
-      lcd.print(" m     ");
+      lcd.print(" m");
       lcd.sendBuffer();
       break;
     }
     
     case PROGRAM_YESNO_SETUP: {
-      open_lock();  // Pre-game backdoor
       yesno = false;
       clear();
       backlight.on();
-      lcd.print("Nieuwe route ");
-      lcd.print("\nprogrammeren? ");
+      lcd.print("Nieuwe route\nprogrammeren?");
       lcd.setCursor(0,40);
       lcd.print("terug       OK\nkort      lang");
       lcd.sendBuffer();
@@ -525,13 +498,15 @@ void loop() {
      
     case PROGRAM_YESNO: {
       switch (button.pressed()) {
-        case SHORT:
+        case SHORT: {
           state = SELECT_ROUTE_SETUP; //CLOSE_SETUP;
           break;
-        case LONG:
+        }
+        case LONG: {
           state = WAIT_FOR_FIX_SETUP;
           nextstate = PROGRAM_SETUP;
           break;
+        }
       }
       break;
     }
@@ -543,11 +518,9 @@ void loop() {
     }
   
     case PROGRAM_UPDATE: {
-      backlight.on(15 *seconds);
+      backlight.on(15000);
       clear();
-      lcd.print("Ga naar WP ");
-      lcd.print(waypoint, DEC);
-      lcd.print(".\n");
+      lcd.printf("Ga naar WP %d.\n", waypoint);
       if (waypoint > 1)
         lcd.print("Tussenafstand:");
       lcd.setCursor(0,40);
@@ -561,7 +534,7 @@ void loop() {
       switch (button.pressed()) {
         case NOT:
           lcd.setDrawColor(0);
-          lcd.drawBox(0,20,128,10);
+          lcd.drawBox(0,20,110,12);
           lcd.setDrawColor(1);
           lcd.setCursor(0, 20);
           if (waypoint < 2) break;
@@ -585,7 +558,6 @@ void loop() {
       there.lon = gps.location.lng();  
       there.tolerance = 20;
       there.text = "Waypoint {n}\nbereikt.";
-      there.flags = 0;  // FIXME
       waypoints[waypoint - 1] = there;
       max_waypoint = waypoint;
       state = ++waypoint > MAX_WAYPOINT ? PROGRAM_DONE : PROGRAM_UPDATE;
@@ -593,7 +565,7 @@ void loop() {
     }
     
     case PROGRAM_DONE: {
-      backlight.on(10 *seconds);
+      backlight.on(10000);
       char filename[32];
       sprintf(
         filename,
@@ -618,7 +590,7 @@ void loop() {
       clear();
       lcd.print("Programmeren\nafgerond.");
       lcd.sendBuffer();
-      delay(5 *seconds);
+      delay(5000);
       state = SELECT_ROUTE_SETUP;
       break;
     }
@@ -657,26 +629,32 @@ void loop() {
   delay(10);
 }
 
+/////////////////////////////////////////////////////////////////////////////////////////////////
+////// Web based configuration //////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <HTTP_Method.h>
 WebServer http(80);
 
-
 void webding() {
-  uint64_t chipid = ESP.getEfuseMac();
   char essid[16];
+  uint64_t chipid = ESP.getEfuseMac();
+  sprintf(essid, "revgeo-%04x", ESP.getEfuseMac());
   char* password = "password";
-  sprintf(essid, "revgeo-%04x", chipid);
   WiFi.softAP(essid, password);
   delay(500);
-  lcd.clear();
   uint32_t _ip = WiFi.softAPIP();
+  
   char ip[15];
   sprintf(ip, "%d.%d.%d.%d", _ip & 0xff, _ip >> 8 & 0xff, _ip >> 16 & 0xff, _ip >> 24);
+  clear();
   lcd.printf("WiFi\n  %s\npw:\n  %s\nhttp://\n  %s", essid, password, ip);
   lcd.sendBuffer();
-  Serial.println(WiFi.softAPIP());
   
   http.on("/", HTTP_GET, []() {
-    String content = F(
+    String content =
       "<script>"
       "function rm(p) {"
         "if(!confirm('Delete?'))return;"
@@ -689,22 +667,36 @@ void webding() {
        "</script>"
        "<h1>RevGeo routes</h1>"
        "Note: This interface assumes you know what you're doing. Unsupported user input may result in overwritten data or a bricked device.<p>"
-       "<button onclick='create()'>Create new</button><p><table border=1 cellpadding=10;>"
-    );
+       "<button onclick='create()'>Create new</button><p><table border=1 cellpadding=10;>";
+
+    const String td_template =
+      "<tr><td><a href='{f}'>{b}</a>"
+      "<td><a href='/edit?fn={f}'>edit</a>"
+      "<td><a href='/mv?old={f}'>rename</a>"
+      "<td><a href=x onclick='rm(\"{f}\");return false'>delete</a>";
+
     File dir = SPIFFS.open("/routes", "r");
     File f;
     while (f = dir.openNextFile()) {
       String filename = f.name();
-      content += "<tr><td><a href='" + filename + "'>" + filename.substring(strlen("/routes/"), filename.lastIndexOf('.'))
-      + "</a>"
-        "<td><a href='/edit?fn=" + filename + "'>edit</a>"
-        "<td><a href='/mv?old=" + filename + "'>rename</a>"
-        "<td><a href=x onclick='rm(\"" + filename + "\");return false'>delete</a>";
+      String td = td_template;
+      td.replace("{f}", filename);
+      td.replace("{b}", filename.substring(strlen("/routes/"), filename.lastIndexOf('.')));
+      content += td;
+
     }
     http.send(200, "text/html", content);
   });
+  
   http.on("/edit", HTTP_ANY, []() {
     String filename = http.arg("fn");
+
+    String content =
+      "<a href='/'>Back without saving</a><p>"
+      "<form method=POST action=/edit><input name=fn value='{f}'><br>"
+      "<textarea cols=80 rows=24 name=data>{j}</textarea>"
+      "<input type=submit value=Store>";
+    
     if (http.method() == HTTP_POST) {
       SPIFFS.mkdir("/routes");  // opportunistic; ignore result
       File f = SPIFFS.open(filename, "w");
@@ -714,38 +706,39 @@ void webding() {
       f.print(http.arg("data"));
       f.close();
     }
+    
+    String json;
     File f = SPIFFS.open(filename, "r");
-    String content =
-      "<a href='/'>Back without saving</a><p>"
-      "<form method=POST action=/edit><input name=fn value='" + filename + "'><br>"
-      "<textarea cols=80 rows=24 name=data>";
-    while (f.available()) {
-      char c = f.read();
-      if (c == '<') content += "&lt;"; else content += c;
-    }
-    content += "</textarea>"
-      "<input onclick='' type=submit value=Store>";
-   http.send(200, "text/html", content);
+    while (f.available()) json += char(f.read());
+    json.replace("<", "&lt;");
+    
+    content.replace("{f}", filename);
+    content.replace("{j}", json);
+    
+    http.send(200, "text/html", content);
   });
+  
   http.on("/mv", HTTP_GET, []() {
-    String o = http.arg("old");
-    http.send(200, "text/html", "<a href='/'>Back without saving</a>"
+    String content =
+      "<a href='/'>Back without saving</a>"
       "<form action=/mv method=post>"
-      "<input type=hidden name=old value='" + o + "'>"
-      "New name: <input name=new value='" + o + "'> "
-      "<input type=submit value=Rename></form>"
-    );
+      "<input type=hidden name=old value='{o}'>"
+      "New name: <input name=new value='{o}'> "
+      "<input type=submit value=Rename></form>";
+
+    content.replace("{o}", http.arg("old"));
+    http.send(200, "text/html", content);
   });
+  
   http.on("/mv", HTTP_POST, []() {
-    String o = http.arg("old");
-    String n = http.arg("new");
-    SPIFFS.rename(o, n);
+    SPIFFS.rename(http.arg("old"), http.arg("new"));
     http.sendHeader("Location", "/");
     http.send(302);
   });
+  
   http.onNotFound([]() {
     String filename = http.uri();
-
+  
     if (http.method() == HTTP_DELETE) {
       SPIFFS.remove(filename);
       http.send(200, "text/plain", "Gone :(");
@@ -758,6 +751,7 @@ void webding() {
     }
     http.streamFile(f, "text/plain");
   });
+  
   http.begin();
   
   for (;;) {
