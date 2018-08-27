@@ -1,6 +1,6 @@
 Reversed Geocaching
 
 
-Written for ESP32 (originally for Arduino Pro Mini)
+Written for ESP32 (originally for Arduino Duemilanove)
 
 C++ is not my native language. Please fix my code and send pull requests :)
