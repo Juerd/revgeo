@@ -1,6 +1,6 @@
 Reversed Geocaching
 
 
-Written for ESP32 (originally for Arduino Duemilanove)
+Written for the ESP32 based Adafruit HUZZAH32 (originally for Arduino).
 
 C++ is not my native language. Please fix my code and send pull requests :)
