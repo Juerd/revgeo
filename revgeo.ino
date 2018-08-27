@@ -1,5 +1,5 @@
 //#define LOCKABLE
-#define S(f, ...) ({ char sprintfbuf[128]; snprintf(sprintfbuf, 128, f, __VA_ARGS__); sprintfbuf; })
+#define Sprintf(f, ...) ({ char* s; asprintf(&s, f, __VA_ARGS__); String r = s; free(s); r; })
 #define default_font u8g2_font_7x13B_tf
 
 #include <U8g2lib.h>
@@ -422,7 +422,7 @@ void loop() {
       backlight.on();
       
       String text = there.text;
-      text.replace("{n}", S("%d", waypoint));
+      text.replace("{n}", Sprintf("%d", waypoint));
       
       lcd.print(text);
       lcd.sendBuffer();
@@ -565,7 +565,7 @@ void loop() {
     
     case PROGRAM_DONE: {
       backlight.on(10000);
-      char* filename = S(
+      String filename = Sprintf(
         "/routes/%04d%02d%02d-%02d%02d.json",
         gps.date.year(), gps.date.month(), gps.date.day(),
         gps.time.hour(), gps.time.minute()
@@ -635,7 +635,7 @@ void loop() {
 #include <HTTP_Method.h>
 WebServer http(80);
 
-const char* pwgen() {
+String pwgen() {
   const int   max_length = 32;
   const char* filename   = "/softap-password.txt";
   const char* passchars  = "ABCEFGHJKLMNPRSTUXYZabcdefhkmnorstvxz23456789-#@%^<>";
@@ -653,23 +653,21 @@ const char* pwgen() {
     pwfile.close();
   }
   
-  static char stringbuf[max_length + 1];
-  strncpy(stringbuf, password.c_str(), sizeof(stringbuf));
-  return stringbuf;
+  return password;
 }
 
 void webding() {
-  const char* essid = S("revgeo-%llx", ESP.getEfuseMac());  // truncated; fingers crossed!
-  const char* password = pwgen();
+  const String essid = Sprintf("revgeo-%llx", ESP.getEfuseMac());  // truncated; fingers crossed!
+  const String password = pwgen();
   
-  WiFi.softAP(essid, password);
+  WiFi.softAP(essid.c_str(), password.c_str());
   delay(500);
   uint32_t _ip = WiFi.softAPIP();
   
-  const char* ip = S("%d.%d.%d.%d", (_ip & 0xff), (_ip >> 8 & 0xff), (_ip >> 16 & 0xff), (_ip >> 24));
+  const String ip = Sprintf("%d.%d.%d.%d", (_ip & 0xff), (_ip >> 8 & 0xff), (_ip >> 16 & 0xff), (_ip >> 24));
   lcd.clear();
   lcd.setFont(u8g2_font_6x12_tf);
-  lcd.printf("WiFi:\n %s\npw:\n %s\n\nhttp://%s/", essid, password, ip);
+  lcd.printf("WiFi:\n %s\npw:\n %s\n\nhttp://%s/", essid.c_str(), password.c_str(), ip.c_str());
   lcd.sendBuffer();
   
   http.on("/", HTTP_GET, []() {
