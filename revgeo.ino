@@ -13,13 +13,13 @@
 #endif
 
 const float    VFACTOR      = 4096 / 7.4;
-const float    MINIMUM_STARTUP_VOLTAGE = 3.6;
+const float    MINIMUM_STARTUP_VOLTAGE = 3.5;
 const float    EMERGENCY_OPEN_VOLTAGE  = 3.0;
 
 const int      MAX_WAYPOINT = 10;
 const byte     TRIES[]      = { 10, 15, 20 };
 const int      v_batt_pin   = A13;
-const int      button_pin = 14;
+const int      button_pin = 21;
 const int      v_usb_pin = A10;
 const int      min_hdop = 300;
 const int      recommended_hdop = 200;
@@ -55,7 +55,8 @@ void draw_icons(bool send = false) {
   lcd.setDrawColor(0);
   lcd.drawBox(128 - 16, 0, 16, 35);
   lcd.setDrawColor(1);
-  
+  //Serial.println(analogRead(v_usb_pin));
+  //lcd.println(analogRead(v_usb_pin));
   if (analogRead(v_usb_pin) > 1000) {
     lcd.setFont(u8g2_font_open_iconic_embedded_2x_t);
     lcd.drawStr(128 - 16, 0, "C");
@@ -66,8 +67,8 @@ void draw_icons(bool send = false) {
     float v = battery_voltage();
     if (v > 4)   lcd.drawBox(128 - 16 + 4 + 2,  3, 3, 2);
     if (v > 3.7) lcd.drawBox(128 - 16 + 4 + 2,  6, 3, 2);
-    if (v > 3.6) lcd.drawBox(128 - 16 + 4 + 2,  9, 3, 2);
-    if (v > 3.5) lcd.drawBox(128 - 16 + 4 + 2, 12, 3, 2);
+    if (v > 3.5) lcd.drawBox(128 - 16 + 4 + 2,  9, 3, 2);
+    if (v > 3.4) lcd.drawBox(128 - 16 + 4 + 2, 12, 3, 2);
   }
   
   lcd.setFont(u8g2_font_open_iconic_all_2x_t);
@@ -93,7 +94,7 @@ void setup() {
   gps_serial.begin(9600);
   Serial.begin(115200);
   Serial.println("setup");
-  pinMode(14, INPUT_PULLUP);
+  pinMode(button_pin, INPUT_PULLUP);
   lcd.begin();
   lcd.setContrast(255);
   lcd.setLineHeight(10);
@@ -124,13 +125,14 @@ void intro() {
   
   if (battery_voltage() < MINIMUM_STARTUP_VOLTAGE) {
     Serial.println("batt");
-    lcd.setCursor(0, 10);
-    lcd.printf("Batterijspanning\nte laag! (%.2f V)", battery_voltage());
-    lcd.sendBuffer();
     lcd.setContrast(5);
     // Draw attention and deny further usage
     for (;;) {
       delay(400); lcd.setPowerSave(true);  // display off
+      clear();
+      lcd.setCursor(0, 10);
+      lcd.printf("Batterijspanning\nte laag! (%.2f V)", battery_voltage());
+      lcd.sendBuffer();
       delay(400); lcd.setPowerSave(false);
     }
   }
